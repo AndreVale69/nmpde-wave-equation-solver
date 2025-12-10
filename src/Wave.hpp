@@ -218,4 +218,4 @@ protected:
 
 };
 
-#endif
+#endif // HEAT_HPP
