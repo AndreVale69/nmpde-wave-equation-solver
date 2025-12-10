@@ -1,25 +1,7 @@
-# include(${CMAKE_CURRENT_LIST_DIR}/../common/cmake-common.cmake)
-
 # Minimum CMake version required.
 cmake_minimum_required(VERSION 3.12)
 # Project name and language.
 project(nm4pde LANGUAGES CXX C)
-
-# Set C++ standard to C++11.
-set(CMAKE_CXX_STANDARD 11)
-# Require C++11 standard.
-set(CMAKE_CXX_STANDARD_REQUIRED "ON")
-
-# Set default build type to Release.
-if(NOT CMAKE_BUILD_TYPE OR "${CMAKE_BUILD_TYPE}" STREQUAL "")
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
-endif()
-message(STATUS)
-message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-message(STATUS)
-if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-    add_definitions(-DBUILD_TYPE_DEBUG)
-endif()
 
 # Add MK modules path.
 # 1) gcc-glibc/11.2.0  11) eigen/3.3.9      21) scipy/1.7.0
@@ -66,6 +48,9 @@ include_directories(
         /u/sw/toolchains/gcc-glibc/11.2.0/pkgs/dealii/9.5.1/include
 )
 
+# Include common CMake settings.
+include(${CMAKE_CURRENT_LIST_DIR}/../common/cmake-common.cmake)
+
 # Locate MPI compiler.
 find_package(MPI REQUIRED)
 set(CMAKE_CXX_COMPILER "${MPI_CXX_COMPILER}")
@@ -97,5 +82,6 @@ add_executable(
         project
         src/main.cpp
         src/Wave.cpp
+        src/Wave.hpp
 )
 deal_ii_setup_target(project)
