@@ -33,4 +33,9 @@
 *.out
 *.app
 
+# IDEs
+.vscode/
+.idea/
+*.code-workspace
+
 */build/*
