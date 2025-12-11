@@ -3,8 +3,8 @@
 Language: Cpp
 BasedOnStyle: LLVM
 AccessModifierOffset: -4
-AlignConsecutiveAssignments: false
-AlignConsecutiveDeclarations: false
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
 AlignOperands: true
 AlignTrailingComments: false
 AlwaysBreakTemplateDeclarations: Yes
@@ -26,10 +26,16 @@ BraceWrapping:
   SplitEmptyRecord: true
   SplitEmptyNamespace: true
 BreakBeforeBraces: Custom
-BreakConstructorInitializers: AfterColon
+# Keep constructor initializer entries one-per-line and break before the comma so
+# each initializer appears on its own line and can be aligned in columns.
+BreakConstructorInitializers: BeforeComma
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
 BreakConstructorInitializersBeforeComma: false
+BinPackParameters: false        # don't pack multiple parameters on one line
+AlignAfterOpenBracket: Align    # align parameters in a column under the first
+BinPackArguments: false
+AllowAllParametersOfDeclarationOnNextLine: true
 ColumnLimit: 120
-ConstructorInitializerAllOnOneLineOrOnePerLine: false
 ContinuationIndentWidth: 8
 IncludeCategories: 
   - Regex: '^<.*'
