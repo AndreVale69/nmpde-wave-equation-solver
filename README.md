@@ -20,14 +20,9 @@ allowing for the simulation of wave propagation in a defined domain.
 
 Consider the wave equation in 2D [1, 2]:
 
-$$
-\begin{cases}
-    \dfrac{\partial^2 u}{\partial t^2} - \Delta u = f & \text{in } \Omega, \\[.3em]
-    u = g & \text{on } \partial \Omega, \\[.3em]
-    u(t = 0) = u_0 & \text{in } \Omega, \\[.3em]
-    \dfrac{\partial u}{\partial t} = u_1 & \text{in } \Omega.
-\end{cases}
-$$
+<p align="center">
+    <img src="_static/problem_equation.png" alt="Wave Equation" width="200"/>
+</p>
 
 Implement a finite element solver for problem above. Discuss the choice of the time and space discretization methods,
 the properties of the chosen method (especially in terms of numerical dissipation and dispersion, see [1, 2])
