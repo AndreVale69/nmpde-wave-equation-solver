@@ -1,314 +1,298 @@
 #include "Wave.hpp"
 
-void
-Wave::setup()
+void Wave::setup()
 {
-  // Create the mesh.
-  {
-    pcout << "Initializing the mesh" << std::endl;
+    // Create the mesh.
+    {
+        pcout << "Initializing the mesh" << std::endl;
 
-    Triangulation<dim> mesh_serial;
+        Triangulation<dim> mesh_serial;
 
-    GridIn<dim> grid_in;
-    grid_in.attach_triangulation(mesh_serial);
+        GridIn<dim> grid_in;
+        grid_in.attach_triangulation(mesh_serial);
 
-    std::ifstream grid_in_file(mesh_file_name);
-    grid_in.read_msh(grid_in_file);
+        std::ifstream grid_in_file(mesh_file_name);
+        grid_in.read_msh(grid_in_file);
 
-    GridTools::partition_triangulation(mpi_size, mesh_serial);
-    const auto construction_data = TriangulationDescription::Utilities::
-      create_description_from_triangulation(mesh_serial, MPI_COMM_WORLD);
-    mesh.create_triangulation(construction_data);
+        GridTools::partition_triangulation(mpi_size, mesh_serial);
+        const TriangulationDescription::Description<dim, dim> construction_data = TriangulationDescription::Utilities::
+            create_description_from_triangulation(mesh_serial, MPI_COMM_WORLD);
+        mesh.create_triangulation(construction_data);
 
-    pcout << "  Number of elements = " << mesh.n_global_active_cells()
-          << std::endl;
-  }
+        pcout << "  Number of elements = " << mesh.n_global_active_cells() << std::endl;
+    }
 
-  pcout << "-----------------------------------------------" << std::endl;
+    pcout << "-----------------------------------------------" << std::endl;
 
-  // Initialize the finite element space.
-  {
-    pcout << "Initializing the finite element space" << std::endl;
+    // Initialize the finite element space.
+    {
+        pcout << "Initializing the finite element space" << std::endl;
 
-    fe = std::make_unique<FE_SimplexP<dim>>(r);
+        fe = std::make_unique<FE_SimplexP<dim>>(r);
 
-    pcout << "  Degree                     = " << fe->degree << std::endl;
-    pcout << "  DoFs per cell              = " << fe->dofs_per_cell
-          << std::endl;
+        pcout << "  Degree                     = " << fe->degree << std::endl;
+        pcout << "  DoFs per cell              = " << fe->dofs_per_cell << std::endl;
 
-    quadrature = std::make_unique<QGaussSimplex<dim>>(r + 1);
+        quadrature = std::make_unique<QGaussSimplex<dim>>(r + 1);
 
-    pcout << "  Quadrature points per cell = " << quadrature->size()
-          << std::endl;
-  }
+        pcout << "  Quadrature points per cell = " << quadrature->size() << std::endl;
+    }
 
-  pcout << "-----------------------------------------------" << std::endl;
+    pcout << "-----------------------------------------------" << std::endl;
 
-  // Initialize the DoF handler.
-  {
-    pcout << "Initializing the DoF handler" << std::endl;
+    // Initialize the DoF handler.
+    {
+        pcout << "Initializing the DoF handler" << std::endl;
 
-    dof_handler.reinit(mesh);
-    dof_handler.distribute_dofs(*fe);
+        dof_handler.reinit(mesh);
+        dof_handler.distribute_dofs(*fe);
 
-    locally_owned_dofs = dof_handler.locally_owned_dofs();
-    locally_relevant_dofs =
-      DoFTools::extract_locally_relevant_dofs(dof_handler);
+        locally_owned_dofs = dof_handler.locally_owned_dofs();
+        locally_relevant_dofs = DoFTools::extract_locally_relevant_dofs(dof_handler);
 
-    pcout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
-  }
+        pcout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
+    }
 
-  pcout << "-----------------------------------------------" << std::endl;
+    pcout << "-----------------------------------------------" << std::endl;
 
-  // Initialize the linear system.
-  {
-    pcout << "Initializing the linear system" << std::endl;
+    // Initialize the linear system.
+    {
+        pcout << "Initializing the linear system" << std::endl;
 
-    pcout << "  Initializing the sparsity pattern" << std::endl;
+        pcout << "  Initializing the sparsity pattern" << std::endl;
 
-    TrilinosWrappers::SparsityPattern sparsity(locally_owned_dofs,
-                                               MPI_COMM_WORLD);
-    DoFTools::make_sparsity_pattern(dof_handler, sparsity);
-    sparsity.compress();
+        TrilinosWrappers::SparsityPattern sparsity(locally_owned_dofs, MPI_COMM_WORLD);
+        DoFTools::make_sparsity_pattern(dof_handler, sparsity);
+        sparsity.compress();
 
-    pcout << "  Initializing the matrices" << std::endl;
-    mass_matrix.reinit(sparsity);
-    stiffness_matrix.reinit(sparsity);
-    lhs_matrix.reinit(sparsity);
-    rhs_matrix.reinit(sparsity);
+        pcout << "  Initializing the matrices" << std::endl;
+        mass_matrix.reinit(sparsity);
+        stiffness_matrix.reinit(sparsity);
+        lhs_matrix.reinit(sparsity);
+        rhs_matrix.reinit(sparsity);
 
-    pcout << "  Initializing the system right-hand side" << std::endl;
-    system_rhs.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-    pcout << "  Initializing the solution vector" << std::endl;
-    solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-    solution.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
+        pcout << "  Initializing the system right-hand side" << std::endl;
+        system_rhs.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+        pcout << "  Initializing the solution vector" << std::endl;
+        solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+        solution.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
 
-    pcout << "  Initializing the velocity vector" << std::endl;
-    velocity_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-    velocity.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
-
-  }
+        pcout << "  Initializing the velocity vector" << std::endl;
+        velocity_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+        velocity.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
+    }
 }
 
-void
-Wave::assemble_matrices()
+void Wave::assemble_matrices()
 {
-  pcout << "===============================================" << std::endl;
-  pcout << "Assembling the system matrices" << std::endl;
+    pcout << "===============================================" << std::endl;
+    pcout << "Assembling the system matrices" << std::endl;
 
-  const unsigned int dofs_per_cell = fe->dofs_per_cell;
-  const unsigned int n_q           = quadrature->size();
+    const unsigned int dofs_per_cell = fe->dofs_per_cell;
+    const unsigned int n_q           = quadrature->size();
 
-  FEValues<dim> fe_values(*fe,
-                          *quadrature,
-                          update_values | update_gradients |
-                            update_quadrature_points | update_JxW_values);
+    FEValues fe_values(*fe,
+                       *quadrature,
+                       update_values | update_gradients |
+                       update_quadrature_points | update_JxW_values);
 
-  FullMatrix<double> cell_mass_matrix(dofs_per_cell, dofs_per_cell);
-  FullMatrix<double> cell_stiffness_matrix(dofs_per_cell, dofs_per_cell);
+    FullMatrix<double> cell_mass_matrix(dofs_per_cell, dofs_per_cell);
+    FullMatrix<double> cell_stiffness_matrix(dofs_per_cell, dofs_per_cell);
 
-  std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
+    std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
 
-  mass_matrix      = 0.0;
-  stiffness_matrix = 0.0;
+    mass_matrix      = 0.0;
+    stiffness_matrix = 0.0;
 
-  for (const auto &cell : dof_handler.active_cell_iterators())
+    for (const auto &cell : dof_handler.active_cell_iterators())
     {
-      if (!cell->is_locally_owned())
-        continue;
+        if (!cell->is_locally_owned())
+            continue;
 
-      fe_values.reinit(cell);
+        fe_values.reinit(cell);
 
-      cell_mass_matrix      = 0.0;
-      cell_stiffness_matrix = 0.0;
+        cell_mass_matrix      = 0.0;
+        cell_stiffness_matrix = 0.0;
 
-      for (unsigned int q = 0; q < n_q; ++q)
+        for (unsigned int q = 0; q < n_q; ++q)
         {
-          // Evaluate coefficients on this quadrature node.
-          const double mu_loc = mu.value(fe_values.quadrature_point(q));
+            // Evaluate coefficients on this quadrature node.
+            const double mu_loc = mu.value(fe_values.quadrature_point(q));
 
-          for (unsigned int i = 0; i < dofs_per_cell; ++i)
+            for (unsigned int i = 0; i < dofs_per_cell; ++i)
             {
-              for (unsigned int j = 0; j < dofs_per_cell; ++j)
+                for (unsigned int j = 0; j < dofs_per_cell; ++j)
                 {
-                  cell_mass_matrix(i, j) += fe_values.shape_value(i, q) *
-                                            fe_values.shape_value(j, q) /
-                                            deltat * fe_values.JxW(q);
+                    cell_mass_matrix(i, j) += fe_values.shape_value(i, q) *
+                                              fe_values.shape_value(j, q) /
+                                              deltat * fe_values.JxW(q);
 
-                  cell_stiffness_matrix(i, j) +=
-                    mu_loc * fe_values.shape_grad(i, q) *
-                    fe_values.shape_grad(j, q) * fe_values.JxW(q);
+                    cell_stiffness_matrix(i, j) += mu_loc *
+                                                   fe_values.shape_grad(i, q) *
+                                                   fe_values.shape_grad(j, q) *
+                                                   fe_values.JxW(q);
                 }
             }
         }
 
-      cell->get_dof_indices(dof_indices);
+        cell->get_dof_indices(dof_indices);
 
-      mass_matrix.add(dof_indices, cell_mass_matrix);
-      stiffness_matrix.add(dof_indices, cell_stiffness_matrix);
+        mass_matrix.add(dof_indices, cell_mass_matrix);
+        stiffness_matrix.add(dof_indices, cell_stiffness_matrix);
     }
 
-  mass_matrix.compress(VectorOperation::add);
-  stiffness_matrix.compress(VectorOperation::add);
+    mass_matrix.compress(VectorOperation::add);
+    stiffness_matrix.compress(VectorOperation::add);
 
-  // C_LHS = M/deltat + theta^2 * deltat * K
-  lhs_matrix.copy_from(mass_matrix);
-  lhs_matrix.add(theta * theta * deltat, stiffness_matrix);
+    // C_LHS = M/deltat + theta^2 * deltat * K
+    lhs_matrix.copy_from(mass_matrix);
+    lhs_matrix.add(theta * theta * deltat, stiffness_matrix);
 
-  // C_RHS^(V) = M/deltat - theta(1-theta) * deltat * K
-  rhs_matrix.copy_from(mass_matrix);
-  rhs_matrix.add(-theta * (1.0 - theta) * deltat, stiffness_matrix);
-
+    // C_RHS^(V) = M/deltat - theta(1-theta) * deltat * K
+    rhs_matrix.copy_from(mass_matrix);
+    rhs_matrix.add(-theta * (1.0 - theta) * deltat, stiffness_matrix);
 }
 
-void
-Wave::assemble_rhs(const double &time)
+void Wave::assemble_rhs(const double &time)
 {
-  const unsigned int dofs_per_cell = fe->dofs_per_cell;
-  const unsigned int n_q           = quadrature->size();
+    const unsigned int dofs_per_cell = fe->dofs_per_cell;
+    const unsigned int n_q           = quadrature->size();
 
-  FEValues<dim> fe_values(*fe,
-                          *quadrature,
-                          update_values | update_quadrature_points |
-                            update_JxW_values);
+    FEValues fe_values(*fe,
+                       *quadrature,
+                       update_values | update_quadrature_points | update_JxW_values);
 
-  Vector<double> cell_rhs(dofs_per_cell);
+    Vector<double> cell_rhs(dofs_per_cell);
 
-  std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
+    std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
 
-  system_rhs = 0.0;
+    system_rhs = 0.0;
 
-  for (const auto &cell : dof_handler.active_cell_iterators())
+    for (const auto &cell : dof_handler.active_cell_iterators())
     {
-      if (!cell->is_locally_owned())
-        continue;
+        if (!cell->is_locally_owned())
+            continue;
 
-      fe_values.reinit(cell);
+        fe_values.reinit(cell);
 
-      cell_rhs = 0.0;
+        cell_rhs = 0.0;
 
-      for (unsigned int q = 0; q < n_q; ++q)
+        for (unsigned int q = 0; q < n_q; ++q)
         {
-          // We need to compute the forcing term at the current time (tn+1) and
-          // at the old time (tn). deal.II Functions can be computed at a
-          // specific time by calling their set_time method.
+            // We need to compute the forcing term at the current time (tn+1) and
+            // at the old time (tn). deal.II Functions can be computed at a
+            // specific time by calling their set_time method.
 
-          // Compute f(tn+1)
-          forcing_term.set_time(time);
-          const double f_new_loc =
-            forcing_term.value(fe_values.quadrature_point(q));
+            // Compute f(tn+1)
+            forcing_term.set_time(time);
+            const double f_new_loc = forcing_term.value(fe_values.quadrature_point(q));
 
-          // Compute f(tn)
-          forcing_term.set_time(time - deltat);
-          const double f_old_loc =
-            forcing_term.value(fe_values.quadrature_point(q));
+            // Compute f(tn)
+            forcing_term.set_time(time - deltat);
+            const double f_old_loc = forcing_term.value(fe_values.quadrature_point(q));
 
-          for (unsigned int i = 0; i < dofs_per_cell; ++i)
+            for (unsigned int i = 0; i < dofs_per_cell; ++i)
             {
-              cell_rhs(i) += (theta * f_new_loc + (1.0 - theta) * f_old_loc) *
-                             fe_values.shape_value(i, q) * fe_values.JxW(q);
+                cell_rhs(i) += (theta * f_new_loc + (1.0 - theta) * f_old_loc) *
+                               fe_values.shape_value(i, q) *
+                               fe_values.JxW(q);
             }
         }
 
-      cell->get_dof_indices(dof_indices);
-      system_rhs.add(dof_indices, cell_rhs);
+        cell->get_dof_indices(dof_indices);
+        system_rhs.add(dof_indices, cell_rhs);
     }
 
-  system_rhs.compress(VectorOperation::add);
+    system_rhs.compress(VectorOperation::add);
 
-  // system_rhs += C_RHS^(V) * V^n
-  rhs_matrix.vmult_add(system_rhs, velocity_owned);
+    // system_rhs += C_RHS^(V) * V^n
+    rhs_matrix.vmult_add(system_rhs, velocity_owned);
 
-  // system_rhs += (-K) * U^n
-  TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
-  stiffness_matrix.vmult(tmp, solution_owned);
-  system_rhs.add(-1.0, tmp);
+    // system_rhs += (-K) * U^n
+    TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
+    stiffness_matrix.vmult(tmp, solution_owned);
+    system_rhs.add(-1.0, tmp);
 }
 
-void
-Wave::solve_time_step()
+void Wave::solve_time_step()
 {
-  // Save V^n before overwriting it
-  TrilinosWrappers::MPI::Vector velocity_old(locally_owned_dofs, MPI_COMM_WORLD);
-  velocity_old = velocity_owned;
+    // Save V^n before overwriting it
+    TrilinosWrappers::MPI::Vector velocity_old(locally_owned_dofs, MPI_COMM_WORLD);
+    velocity_old = velocity_owned;
 
-  SolverControl solver_control(1000, 1e-6 * system_rhs.l2_norm());
+    SolverControl solver_control(1000, 1e-6 * system_rhs.l2_norm());
 
-  SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
-  TrilinosWrappers::PreconditionSSOR      preconditioner;
-  preconditioner.initialize(
-    lhs_matrix, TrilinosWrappers::PreconditionSSOR::AdditionalData(1.0));
+    SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
+    TrilinosWrappers::PreconditionSSOR      preconditioner;
+    preconditioner.initialize(lhs_matrix, TrilinosWrappers::PreconditionSSOR::AdditionalData(1.0));
 
-  // Solve for V^{n+1}
-  solver.solve(lhs_matrix, velocity_owned, system_rhs, preconditioner);
-  pcout << "  " << solver_control.last_step() << " CG iterations" << std::endl;
+    // Solve for V^{n+1}
+    solver.solve(lhs_matrix, velocity_owned, system_rhs, preconditioner);
+    pcout << "  " << solver_control.last_step() << " CG iterations" << std::endl;
 
-  velocity = velocity_owned;
-
-  // Update U^{n+1} = U^n + dt[(1-theta) V^n + theta V^{n+1}]
-  solution_owned.add(deltat * (1.0 - theta), velocity_old);
-  solution_owned.add(deltat * theta,          velocity_owned);
-  solution = solution_owned;
-}
-
-
-void
-Wave::output(const unsigned int &time_step) const
-{
-  DataOut<dim> data_out;
-  data_out.add_data_vector(dof_handler, solution, "u");
-  data_out.add_data_vector(dof_handler, velocity, "v");
-
-
-  std::vector<unsigned int> partition_int(mesh.n_active_cells());
-  GridTools::get_subdomain_association(mesh, partition_int);
-  const Vector<double> partitioning(partition_int.begin(), partition_int.end());
-  data_out.add_data_vector(partitioning, "partitioning");
-
-  data_out.build_patches();
-
-  data_out.write_vtu_with_pvtu_record(
-    "./", "output", time_step, MPI_COMM_WORLD, 3);
-}
-
-void
-Wave::solve()
-{
-  assemble_matrices();
-
-  pcout << "===============================================" << std::endl;
-
-  // Apply the initial conditions.
-  {
-    pcout << "Applying the initial conditions" << std::endl;
-
-    // U^0
-    VectorTools::interpolate(dof_handler, u_0, solution_owned);
-    solution = solution_owned;
-
-    // V^0
-    VectorTools::interpolate(dof_handler, v_0, velocity_owned);
     velocity = velocity_owned;
 
-    // Output the initial solution (solo u)
-    output(0);
-    pcout << "-----------------------------------------------" << std::endl;
-  }
+    // Update U^{n+1} = U^n + dt[(1-theta) V^n + theta V^{n+1}]
+    solution_owned.add(deltat * (1.0 - theta), velocity_old);
+    solution_owned.add(deltat * theta,          velocity_owned);
+    solution = solution_owned;
+}
 
 
-  unsigned int time_step = 0;
-  double       time      = 0;
+void Wave::output(const unsigned int &time_step) const
+{
+    DataOut<dim> data_out;
+    data_out.add_data_vector(dof_handler, solution, "u");
+    data_out.add_data_vector(dof_handler, velocity, "v");
 
-  while (time < T)
+    std::vector<unsigned int> partition_int(mesh.n_active_cells());
+    GridTools::get_subdomain_association(mesh, partition_int);
+    const Vector<double> partitioning(partition_int.begin(), partition_int.end());
+    data_out.add_data_vector(partitioning, "partitioning");
+
+    data_out.build_patches();
+
+    data_out.write_vtu_with_pvtu_record(
+        "./", "output", time_step, MPI_COMM_WORLD, 3
+    );
+}
+
+void Wave::solve()
+{
+    assemble_matrices();
+
+    pcout << "===============================================" << std::endl;
+
+    // Apply the initial conditions.
     {
-      time += deltat;
-      ++time_step;
+        pcout << "Applying the initial conditions" << std::endl;
 
-      pcout << "n = " << std::setw(3) << time_step << ", t = " << std::setw(5)
-            << time << ":" << std::flush;
+        // U^0
+        VectorTools::interpolate(dof_handler, u_0, solution_owned);
+        solution = solution_owned;
 
-      assemble_rhs(time);
-      solve_time_step();
-      output(time_step);
+        // V^0
+        VectorTools::interpolate(dof_handler, v_0, velocity_owned);
+        velocity = velocity_owned;
+
+        // Output the initial solution (solo u)
+        output(0);
+        pcout << "-----------------------------------------------" << std::endl;
+    }
+
+    unsigned int time_step = 0;
+    double       time      = 0;
+
+    while (time < T)
+    {
+        time += deltat;
+        ++time_step;
+
+        pcout << "n = " << std::setw(3) << time_step << ", t = " << std::setw(5)
+              << time << ":" << std::flush;
+
+        assemble_rhs(time);
+        solve_time_step();
+        output(time_step);
     }
 }
