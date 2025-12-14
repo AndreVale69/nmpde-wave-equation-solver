@@ -3,6 +3,32 @@
 #include "theta_integrator.hpp"
 #include "time_integrator.hpp"
 
+void Wave::process_mesh_input() {
+    try {
+        std::filesystem::path p(mesh_file_name);
+        if (p.has_extension() && p.extension() == ".geo") {
+            // Output mesh file: same name but .msh extension
+            std::filesystem::path out = p;
+            out.replace_extension(".msh");
+
+            // Build gmsh command. Use -2 (2D mesh) and explicit output format
+            const std::string cmd =
+                    "gmsh -2 -format msh2 -o \"" + out.string() + "\" \"" + p.string() + "\"";
+
+            const int ret = std::system(cmd.c_str());
+            AssertThrow(ret == 0,
+                        ExcMessage("Failed to run gmsh to generate mesh from .geo file: " +
+                                   mesh_file_name));
+
+            // Replace the mesh file name with the generated mesh file
+            mesh_file_name = out.string();
+        }
+    } catch (const std::exception &e) {
+        AssertThrow(false,
+                    ExcMessage(std::string("Exception while processing mesh input: ") + e.what()));
+    }
+}
+
 void Wave::setup() {
     // Create the mesh.
     {

@@ -30,6 +30,9 @@
 #include <iostream>
 #include <utility>
 
+#include <cstdlib>
+#include <filesystem>
+
 #include "time_integrator.hpp"
 #include "time_scheme.hpp"
 
@@ -81,7 +84,7 @@ public:
 
     // Constructor. We provide the final time, time step Delta t and theta method
     // parameter as constructor arguments.
-    Wave(std::string         mesh_file_name_,
+    Wave(std::string         mesh_input_,
          const unsigned int &r_,
          const double       &T_,
          const double       &deltat_,
@@ -91,12 +94,16 @@ public:
         , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
         , pcout(std::cout, mpi_rank == 0)
         , T(T_)
-        , mesh_file_name(std::move(mesh_file_name_))
+        , mesh_file_name(std::move(mesh_input_))
         , r(r_)
         , deltat(deltat_)
         , theta(theta_)
         , time_scheme(time_scheme_)
-        , mesh(MPI_COMM_WORLD) {}
+        , mesh(MPI_COMM_WORLD) {
+        // If the user provided a .geo file, try to generate a .msh mesh file
+        // using gmsh automatically.
+        process_mesh_input();
+    }
 
     // Initialization.
     void setup();
@@ -150,8 +157,11 @@ protected:
 
     // Discretization. ///////////////////////////////////////////////////////////
 
-    // Mesh file name.
-    const std::string mesh_file_name;
+    /**
+     * Mesh file name (input). Can be a .msh or .geo file. If it is a .geo file,
+     * gmsh will be called to generate a .msh mesh file.
+     */
+    std::string mesh_file_name;
 
     // Polynomial degree.
     const unsigned int r;
@@ -206,6 +216,12 @@ protected:
 
     // Velocity (including ghost elements).
     TrilinosWrappers::MPI::Vector velocity;
+
+    /**
+     * Process the mesh input file. If it is a .geo file, attempt to generate
+     * a .msh mesh file using gmsh and update the mesh_file_name accordingly.
+     */
+    void process_mesh_input();
 };
 
 #endif // HEAT_HPP
