@@ -2,6 +2,7 @@
 #define HEAT_HPP
 
 #include <deal.II/base/conditional_ostream.h>
+#include <deal.II/base/exceptions.h>
 #include <deal.II/base/quadrature_lib.h>
 
 #include <deal.II/distributed/fully_distributed_tria.h>
@@ -29,69 +30,73 @@
 #include <iostream>
 #include <utility>
 
+#include "time_integrator.hpp"
+#include "time_scheme.hpp"
+
 using namespace dealii;
 
+class TimeIntegrator;
+
 // Class representing the non-linear diffusion problem.
-class Wave
-{
-    public:
+class Wave {
+public:
     // Physical dimension (1D, 2D, 3D)
     static constexpr unsigned int dim = 2;
 
     // Function for the mu coefficient.
-    class FunctionMu : public Function<dim>
-    {
-        public:
-        double value(const Point<dim> & /*p*/, const unsigned int /*component*/ = 0) const override {
+    class FunctionMu : public Function<dim> {
+    public:
+        double value(const Point<dim> & /*p*/,
+                     const unsigned int /*component*/ = 0) const override {
             return 1;
         }
     };
 
     // Function for the forcing term.
-    class ForcingTerm : public Function<dim>
-    {
-        public:
-        double value(const Point<dim> & /*p*/, const unsigned int /*component*/ = 0) const override {
+    class ForcingTerm : public Function<dim> {
+    public:
+        double value(const Point<dim> & /*p*/,
+                     const unsigned int /*component*/ = 0) const override {
             return 0.0;
         }
     };
 
     // Function for the initial condition.
-    class FunctionU0 : public Function<dim>
-    {
-        public:
+    class FunctionU0 : public Function<dim> {
+    public:
         double value(const Point<dim> &p, const unsigned int /*component*/ = 0) const override {
             return p[0] * (1.0 - p[0]) * p[1] * (1.0 - p[1]);
         }
     };
 
     // Function for the initial velocity.
-    class FunctionV0 : public Function<dim>
-    {
-        public:
-        double value(const Point<dim> &/*p*/, const unsigned int /*component*/ = 0) const override {
+    class FunctionV0 : public Function<dim> {
+    public:
+        double value(const Point<dim> & /*p*/,
+                     const unsigned int /*component*/ = 0) const override {
             return 0.0;
         }
     };
 
 
-        // Constructor. We provide the final time, time step Delta t and theta method
-        // parameter as constructor arguments.
-    Wave(std::string mesh_file_name_,
+    // Constructor. We provide the final time, time step Delta t and theta method
+    // parameter as constructor arguments.
+    Wave(std::string         mesh_file_name_,
          const unsigned int &r_,
          const double       &T_,
          const double       &deltat_,
-         const double       &theta_):
-         mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD)),
-         mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD)),
-         pcout(std::cout, mpi_rank == 0),
-         T(T_),
-         mesh_file_name(std::move(mesh_file_name_)),
-         r(r_),
-         deltat(deltat_),
-         theta(theta_),
-         mesh(MPI_COMM_WORLD)
-    {}
+         const double       &theta_,
+         const TimeScheme   &time_scheme_)
+        : mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
+        , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
+        , pcout(std::cout, mpi_rank == 0)
+        , T(T_)
+        , mesh_file_name(std::move(mesh_file_name_))
+        , r(r_)
+        , deltat(deltat_)
+        , theta(theta_)
+        , time_scheme(time_scheme_)
+        , mesh(MPI_COMM_WORLD) {}
 
     // Initialization.
     void setup();
@@ -104,10 +109,7 @@ protected:
     void assemble_matrices();
 
     // Assemble the right-hand side of the problem.
-    void assemble_rhs(const double &time);
-
-    // Solve the problem for one time step.
-    void solve_time_step();
+    void assemble_rhs(const double &time, TrilinosWrappers::MPI::Vector &F_out);
 
     // Output.
     void output(const unsigned int &time_step) const;
@@ -130,6 +132,12 @@ protected:
 
     // Forcing term.
     ForcingTerm forcing_term;
+
+    // Forcing vectors at time n.
+    TrilinosWrappers::MPI::Vector forcing_n;
+
+    // Forcing vectors at time n+1.
+    TrilinosWrappers::MPI::Vector forcing_np1;
 
     // Initial condition.
     FunctionU0 u_0;
@@ -154,6 +162,12 @@ protected:
     // Theta parameter of the theta method.
     const double theta;
 
+    // Time integration scheme.
+    const TimeScheme time_scheme;
+
+    // Time integrator.
+    std::unique_ptr<TimeIntegrator> time_integrator;
+
     // Mesh.
     parallel::fullydistributed::Triangulation<dim> mesh;
 
@@ -177,12 +191,6 @@ protected:
 
     // Stiffness matrix A.
     TrilinosWrappers::SparseMatrix stiffness_matrix;
-
-    // Matrix on the left-hand side (M / deltat + theta A).
-    TrilinosWrappers::SparseMatrix lhs_matrix;
-
-    // Matrix on the right-hand side (M / deltat - (1 - theta) A).
-    TrilinosWrappers::SparseMatrix rhs_matrix;
 
     // Right-hand side vector in the linear system.
     TrilinosWrappers::MPI::Vector system_rhs;
