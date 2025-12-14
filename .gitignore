@@ -43,3 +43,6 @@
 */.cmake/*
 */CMakeFiles/*
 build/*
+
+# generated meshes
+*.msh
