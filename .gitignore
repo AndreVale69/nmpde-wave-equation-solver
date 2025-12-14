@@ -42,4 +42,4 @@
 */cmake-build-debug/*
 */.cmake/*
 */CMakeFiles/*
-*/build/*
+build/*
