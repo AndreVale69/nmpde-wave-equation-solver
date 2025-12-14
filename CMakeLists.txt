@@ -83,5 +83,9 @@ add_executable(
         src/main.cpp
         src/Wave.cpp
         src/Wave.hpp
+        src/time_integrator.hpp
+        src/theta_integrator.hpp
+        src/theta_integrator.cpp
+        src/time_scheme.hpp
 )
 deal_ii_setup_target(nm4pde)
