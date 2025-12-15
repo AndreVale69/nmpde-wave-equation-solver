@@ -18,7 +18,9 @@ void Wave::process_mesh_input() {
             const int ret = std::system(cmd.c_str());
             AssertThrow(ret == 0,
                         ExcMessage("Failed to run gmsh to generate mesh from .geo file: " +
-                                   mesh_file_name));
+                                   mesh_file_name + ". Command executed: " + cmd +
+                                   ". If gmsh is not installed, please install it or provide a "
+                                   "mesh file in .msh format."));
 
             // Replace the mesh file name with the generated mesh file
             mesh_file_name = out.string();
