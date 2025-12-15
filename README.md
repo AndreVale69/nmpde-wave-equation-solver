@@ -14,6 +14,8 @@ This project implements a finite element solver for the 2D wave equation using t
 The solver addresses the wave equation with specified boundary and initial conditions,
 allowing for the simulation of wave propagation in a defined domain.
 
+https://github.com/user-attachments/assets/0cf957e0-a38c-4df5-a5a9-6a82cba1ff15
+
 ---
 
 ## Problem Description
