@@ -14,12 +14,23 @@ void Wave::setup()
 
     if (mesh_file_name.empty())
     {
-      // Use built-in cube mesh generator
-      pcout << "  Generating built-in cube mesh with " << N_subdivisions
+      // Use built-in mesh generator
+      pcout << "  Generating built-in mesh with " << N_subdivisions
             << " subdivisions" << std::endl;
-      GridGenerator::subdivided_hyper_cube(
-          mesh_serial, N_subdivisions, 0.0, 1.0, true);
+      
+      // Option 1: Square mesh with simplices (default)
+      GridGenerator::subdivided_hyper_cube(mesh_serial, N_subdivisions, 0.0, 1.0);
 
+      // Option 2: Circular mesh 
+      // const Point<dim> center(0.5, 0.5);
+      // const double radius = 1.0;
+      // GridGenerator::hyper_ball(mesh_serial, center, radius);
+      // mesh_serial.set_all_manifold_ids(0);
+      // SphericalManifold<dim> boundary_manifold(center);
+      // mesh_serial.set_manifold(0, boundary_manifold);
+      // mesh_serial.refine_global(N_subdivisions - 5);  // Adjust refinement level
+      
+      
       // Convert to simplex mesh
       Triangulation<dim> simplex_mesh;
       GridGenerator::convert_hypercube_to_simplex_mesh(mesh_serial, simplex_mesh);
@@ -95,7 +106,13 @@ void Wave::setup()
     pcout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
     pcout << "  Locally owned DoFs = " << locally_owned_dofs.n_elements() << std::endl;
 
-    // Initialize constraints
+  }
+
+  pcout << "-----------------------------------------------" << std::endl;
+
+  // Initialize constraints
+  {
+    pcout << "Initializing constraints" << std::endl;
     constraints.clear();
     constraints.reinit(locally_relevant_dofs);
     DoFTools::make_hanging_node_constraints(dof_handler, constraints);
@@ -108,8 +125,6 @@ void Wave::setup()
     constraints.close();
     pcout << "  Constrained DoFs = " << constraints.n_constraints() << std::endl;
   }
-
-  pcout << "-----------------------------------------------" << std::endl;
 
   // Initialize the linear system.
   {
@@ -146,6 +161,15 @@ void Wave::setup()
   output_time = 0.0;
 
   pcout << "===============================================" << std::endl;
+}
+
+void Wave::enforce_boundary_conditions_on_vector(TrilinosWrappers::MPI::Vector &vec)
+{
+  for (unsigned int i = 0; i < dof_handler.n_dofs(); ++i)
+  {
+    if (constraints.is_constrained(i) && locally_owned_dofs.is_element(i))
+      vec(i) = 0.0;
+  }
 }
 
 void Wave::assemble_matrices()
@@ -208,39 +232,35 @@ void Wave::assemble_matrices()
   mass_matrix.compress(VectorOperation::add);
   stiffness_matrix.compress(VectorOperation::add);
 
-  // For Newmark method, we solve: M·a_{n+1} = RHS
-  lhs_matrix.copy_from(mass_matrix);
-
   // Apply homogeneous Dirichlet boundary conditions (for manufactured solution)
-  // For wave equation with u=0 on boundary, we have a=0 on boundary too
   // We apply BCs ONCE here and never modify the matrix again
   if (use_manufactured_solution)
   {
     std::map<types::global_dof_index, double> boundary_values;
 
-    Functions::ZeroFunction<dim> zero_function;
+    for (unsigned int i = 0; i < dof_handler.n_dofs(); ++i)
+    {
+      if (constraints.is_constrained(i))
+        boundary_values[i] = 0.0;
+    }
 
-    std::map<types::boundary_id, const Function<dim> *> boundary_functions;
-    for (unsigned int i = 0; i < 4; ++i) // 2D: 4 boundaries instead of 6
-      boundary_functions[i] = &zero_function;
-
-    VectorTools::interpolate_boundary_values(dof_handler,
-                                             boundary_functions,
-                                             boundary_values);
-
-    // Apply BCs to mass matrix with 'true' to eliminate matrix columns
-    // This modifies lhs_matrix (=mass matrix) to enforce a=0 on boundary
     TrilinosWrappers::MPI::Vector dummy_solution(locally_owned_dofs, MPI_COMM_WORLD);
-    dummy_solution = 0.0;
     TrilinosWrappers::MPI::Vector dummy_rhs(locally_owned_dofs, MPI_COMM_WORLD);
+
+    dummy_solution = 0.0;
     dummy_rhs = 0.0;
 
-    MatrixTools::apply_boundary_values(boundary_values,
-                                       lhs_matrix,
-                                       dummy_solution,
-                                       dummy_rhs,
-                                       true); // true = eliminate columns
+    MatrixTools::apply_boundary_values(
+        boundary_values, mass_matrix, dummy_solution, dummy_rhs, true);
+    MatrixTools::apply_boundary_values(
+        boundary_values, stiffness_matrix, dummy_solution, dummy_rhs, true);
+
+    pcout << "  Applied homogeneous Dirichlet BCs to matrices" << std::endl;
   }
+
+  // For Newmark method, we solve: K_eff·a_{n+1} = RHS where K_eff = M + β·Δt²·K
+  lhs_matrix.copy_from(mass_matrix);
+  lhs_matrix.add(beta * deltat * deltat, stiffness_matrix);
 
   auto end = std::chrono::high_resolution_clock::now();
   assembly_time +=
@@ -271,9 +291,9 @@ void Wave::assemble_rhs(const double &time)
 
   std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
 
-  system_rhs = 0.0;
-
+  
   // Assemble forcing term contribution
+  system_rhs = 0.0;
   for (const auto &cell : dof_handler.active_cell_iterators())
   {
     if (!cell->is_locally_owned())
@@ -303,61 +323,17 @@ void Wave::assemble_rhs(const double &time)
   // Add contribution from predicted displacement
   // RHS = f - K·u_pred, where u_pred = u^n + Δt·v^n + Δt²·(0.5-β)·a^n
   TrilinosWrappers::MPI::Vector u_pred(locally_owned_dofs, MPI_COMM_WORLD);
-  TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
-
+  
   u_pred = solution_owned;
   u_pred.add(deltat, velocity_owned);
   u_pred.add(deltat * deltat * (0.5 - beta), acceleration_owned);
 
-  // Enforce boundary conditions on predictor (critical for accuracy)
-  if (use_manufactured_solution)
-  {
-    std::map<types::global_dof_index, double> boundary_values_pred;
-
-    exact_solution.set_time(time); // Predictor approximates u at time^{n+1}
-
-    std::map<types::boundary_id, const Function<dim> *> boundary_functions_pred;
-    for (unsigned int i = 0; i < 4; ++i) // 2D: 4 boundaries instead of 6
-      boundary_functions_pred[i] = &exact_solution;
-
-    VectorTools::interpolate_boundary_values(dof_handler,
-                                             boundary_functions_pred,
-                                             boundary_values_pred);
-
-    // Enforce u_pred = g(t) on boundary
-    for (const auto &pair : boundary_values_pred)
-    {
-      if (locally_owned_dofs.is_element(pair.first))
-        u_pred(pair.first) = pair.second;
-    }
-  }
-
+  TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
   stiffness_matrix.vmult(tmp, u_pred);
-  system_rhs.add(-1.0, tmp);
+  system_rhs.add(-1.0, tmp); // RHS = f - K·u_pred
 
-  // Set RHS to zero at boundary DoFs (for manufactured solution with homogeneous BCs)
-  // The mass matrix was already modified in assemble_matrices()
-  if (use_manufactured_solution)
-  {
-    std::map<types::global_dof_index, double> boundary_values;
-
-    Functions::ZeroFunction<dim> zero_function;
-
-    std::map<types::boundary_id, const Function<dim> *> boundary_functions;
-    for (unsigned int i = 0; i < 4; ++i) // 2D: 4 boundaries instead of 6
-      boundary_functions[i] = &zero_function;
-
-    VectorTools::interpolate_boundary_values(dof_handler,
-                                             boundary_functions,
-                                             boundary_values);
-
-    // Just set RHS values to 0 at boundary DoFs
-    for (const auto &pair : boundary_values)
-    {
-      if (locally_owned_dofs.is_element(pair.first))
-        system_rhs(pair.first) = 0.0;
-    }
-  }
+  enforce_boundary_conditions_on_vector(u_pred);
+  enforce_boundary_conditions_on_vector(system_rhs);
 
   auto end = std::chrono::high_resolution_clock::now();
   assembly_time +=
@@ -375,16 +351,17 @@ void Wave::solve_time_step()
   SolverControl solver_control(1000, 1e-6 * rhs_norm);
   SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
 
-  // Choose preconditioner: SSOR
-  // TrilinosWrappers::PreconditionSSOR preconditioner;
-  // preconditioner.initialize(lhs_matrix, TrilinosWrappers::PreconditionSSOR::AdditionalData(1.0));
+  // Choose preconditioner: SSOR (default) or AMG (commented, uncomment for large problems)
+  TrilinosWrappers::PreconditionSSOR preconditioner;
+  preconditioner.initialize(lhs_matrix,
+                            TrilinosWrappers::PreconditionSSOR::AdditionalData(1.0));
 
-  // AMG preconditioner (better for large problems):
-  TrilinosWrappers::PreconditionAMG preconditioner;
-  TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-  amg_data.smoother_sweeps = 2;
-  amg_data.aggregation_threshold = 0.02;
-  preconditioner.initialize(lhs_matrix, amg_data);
+  // Uncomment for AMG preconditioner (better for large problems):
+  // TrilinosWrappers::PreconditionAMG preconditioner;
+  // TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
+  // amg_data.smoother_sweeps = 2;
+  // amg_data.aggregation_threshold = 0.02;
+  // preconditioner.initialize(lhs_matrix, amg_data);
 
   // Solve for acceleration: M·a_{n+1} = RHS
   solver.solve(lhs_matrix, acceleration_owned, system_rhs, preconditioner);
@@ -398,7 +375,6 @@ void Wave::solve_time_step()
     pcout << "  WARNING: Linear solver did not converge! ("
           << solver_control.last_step() << " iterations)" << std::endl;
   }
-
   acceleration = acceleration_owned;
 
   auto end = std::chrono::high_resolution_clock::now();
@@ -427,6 +403,8 @@ void Wave::project_initial_acceleration()
     acceleration_owned.compress(VectorOperation::insert);
     acceleration = acceleration_owned;
     acceleration.compress(VectorOperation::insert);
+
+    enforce_boundary_conditions_on_vector(acceleration_owned);
   }
   else
   {
@@ -475,17 +453,24 @@ void Wave::project_initial_acceleration()
     stiffness_matrix.vmult(tmp, solution_owned);
     system_rhs.add(-1.0, tmp);
 
+    // Enforce BCs on RHS
+    enforce_boundary_conditions_on_vector(system_rhs);
+
     // Solve M·a_0 = RHS
     SolverControl solver_control(1000, 1e-6 * system_rhs.l2_norm());
     SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
     TrilinosWrappers::PreconditionSSOR preconditioner;
-    preconditioner.initialize(
-        lhs_matrix, TrilinosWrappers::PreconditionSSOR::AdditionalData(1.0));
+    preconditioner.initialize(mass_matrix, TrilinosWrappers::PreconditionSSOR::AdditionalData(1.0));
 
-    solver.solve(lhs_matrix, acceleration_owned, system_rhs, preconditioner);
-    acceleration = acceleration_owned;
-
+    solver.solve(mass_matrix, acceleration_owned, system_rhs, preconditioner);
+    
     pcout << "    " << solver_control.last_step() << " CG iterations" << std::endl;
+
+    acceleration_owned.compress(VectorOperation::insert);
+    acceleration = acceleration_owned;
+    acceleration.compress(VectorOperation::insert);
+
+    enforce_boundary_conditions_on_vector(acceleration_owned);
   }
 }
 
@@ -537,24 +522,23 @@ void Wave::write_time_series(const unsigned int &time_step)
              << eH1_u << "," << eL2_v << std::endl;
 
     // Check energy conservation
-    if (time_step == 0)
-    {
-      initial_energy = energy;
-    }
-    else if (initial_energy > 1e-14)
-    {
-      const double energy_drift = std::abs(energy - initial_energy) / initial_energy;
-      if (energy_drift > 0.05)
-      {
-        pcout << " Energy drift = " << energy_drift * 100.0
-              << "% (exceeds 5% threshold)" << std::endl;
-      }
-    }
+    // if (time_step == 0)
+    // {
+    //   initial_energy = energy;
+    // }
+    // else if (initial_energy > 1e-14)
+    // {
+    //   const double energy_drift = std::abs(energy - initial_energy) / initial_energy;
+    //   if (energy_drift > 0.01)
+    //   {
+    //     pcout << "  WARNING: Energy drift = " << energy_drift * 100.0
+    //           << "% (exceeds 1% threshold)" << std::endl;
+    //   }
+    // }
   }
 }
 
-double
-Wave::compute_error(const VectorTools::NormType &norm_type, const bool for_velocity)
+double Wave::compute_error(const VectorTools::NormType &norm_type, const bool for_velocity)
 {
   FE_SimplexP<dim> fe_linear(1);
   MappingFE mapping(fe_linear);
@@ -592,8 +576,7 @@ Wave::compute_error(const VectorTools::NormType &norm_type, const bool for_veloc
   return error;
 }
 
-double
-Wave::compute_energy()
+double Wave::compute_energy()
 {
   const unsigned int dofs_per_cell = fe->dofs_per_cell;
   const unsigned int n_q = quadrature->size();
@@ -620,8 +603,7 @@ Wave::compute_energy()
 
     for (unsigned int q = 0; q < n_q; ++q)
     {
-      local_kinetic_energy +=
-          0.5 * velocity_values[q] * velocity_values[q] * fe_values.JxW(q);
+      local_kinetic_energy += 0.5 * velocity_values[q] * velocity_values[q] * fe_values.JxW(q);
 
       local_potential_energy += 0.5 * displacement_gradients[q] *
                                 displacement_gradients[q] * fe_values.JxW(q);
@@ -633,59 +615,9 @@ Wave::compute_energy()
   const double global_potential_energy =
       Utilities::MPI::sum(local_potential_energy, MPI_COMM_WORLD);
 
+  pcout << " | Kinetic Energy: " << global_kinetic_energy << " | Potential Energy: " << global_potential_energy;
+
   return global_kinetic_energy + global_potential_energy;
-}
-
-void Wave::diagnose_time_step(const unsigned int &time_step, const double &time)
-{
-  if (time_step % 10 != 0 && time_step != 0)
-    return;
-
-  pcout << "\n=== Diagnostics for timestep " << time_step << " ===" << std::endl;
-
-  // Solution norms
-  pcout << "Solution norms:" << std::endl;
-  pcout << "  Displacement: " << std::scientific << std::setprecision(6)
-        << solution_owned.l2_norm() << std::endl;
-  pcout << "  Velocity:     " << velocity_owned.l2_norm() << std::endl;
-  pcout << "  Acceleration: " << acceleration_owned.l2_norm() << std::endl;
-
-  // Expected values from manufactured solution
-  if (use_manufactured_solution)
-  {
-    exact_solution.set_time(time);
-    exact_velocity.set_time(time);
-    exact_acceleration.set_time(time);
-
-    Point<dim> test_point;
-    test_point[0] = 0.25;  // sin(2π·0.25) = sin(π/2) = 1
-    test_point[1] = 0.167; // sin(3π·0.167) ≈ sin(π/2) ≈ 1
-
-    double u_exact = exact_solution.value(test_point);
-    double v_exact = exact_velocity.value(test_point);
-    double a_exact = exact_acceleration.value(test_point);
-
-    pcout << "\nExpected at (" << test_point[0] << ", " << test_point[1] << "):" << std::endl;
-    pcout << "  u_exact: " << u_exact << std::endl;
-    pcout << "  v_exact: " << v_exact << std::endl;
-    pcout << "  a_exact: " << a_exact << std::endl;
-
-    // Time factors
-    pcout << "\nTime factor: sin(ωt) = " << std::sin(5.0 * M_PI * time) << std::endl;
-    pcout << "             cos(ωt) = " << std::cos(5.0 * M_PI * time) << std::endl;
-
-    // RHS check
-    pcout << "\nRHS L2 norm: " << system_rhs.l2_norm() << std::endl;
-
-    // // Matrix diagnostics
-    // pcout << "\nMatrix diagnostics:" << std::endl;
-    // pcout << "  Mass matrix norm:      " << mass_matrix.frobenius_norm() << std::endl;
-    // pcout << "  Stiffness matrix norm: " << stiffness_matrix.frobenius_norm() << std::endl;
-    // pcout << "  LHS matrix norm:       " << lhs_matrix.frobenius_norm() << std::endl;
-  }
-
-  pcout << "=========================================\n"
-        << std::endl;
 }
 
 void Wave::solve()
@@ -707,60 +639,52 @@ void Wave::solve()
   {
     pcout << "Applying initial conditions" << std::endl;
 
+    const Function<dim> *u_init;
+    const Function<dim> *v_init;
+
     if (use_manufactured_solution)
     {
-      // Use MappingFE for simplex elements
-      const FE_SimplexP<dim> fe_map(1);
-      const MappingFE<dim> mapping(fe_map);
-      
       exact_solution.set_time(0.0);
-      VectorTools::project(mapping,
-                           dof_handler,
-                           constraints,
-                           QGaussSimplex<dim>(r + 1),
-                           exact_solution,
-                           solution_owned);
-      solution_owned.compress(VectorOperation::insert);
-      solution = solution_owned;
-      solution.compress(VectorOperation::insert);
-
       exact_velocity.set_time(0.0);
-      VectorTools::project(mapping,
-                           dof_handler,
-                           constraints,
-                           QGaussSimplex<dim>(r + 1),
-                           exact_velocity,
-                           velocity_owned);
-      velocity_owned.compress(VectorOperation::insert);
-      velocity = velocity_owned;
-      velocity.compress(VectorOperation::insert);
+      u_init = &exact_solution;
+      v_init = &exact_velocity;
     }
     else
     {
-      // Use MappingFE for simplex elements
-      const FE_SimplexP<dim> fe_map(1);
-      const MappingFE<dim> mapping(fe_map);
-      
-      VectorTools::project(mapping,
-                           dof_handler,
-                           constraints,
-                           QGaussSimplex<dim>(r + 1),
-                           u_0,
-                           solution_owned);
-      solution_owned.compress(VectorOperation::insert);
-      solution = solution_owned;
-      solution.compress(VectorOperation::insert);
-
-      VectorTools::project(mapping,
-                           dof_handler,
-                           constraints,
-                           QGaussSimplex<dim>(r + 1),
-                           v_0,
-                           velocity_owned);
-      velocity_owned.compress(VectorOperation::insert);
-      velocity = velocity_owned;
-      velocity.compress(VectorOperation::insert);
+      u_init = &u_0;
+      v_init = &v_0;
     }
+    
+    // Explicit mapping for simplex elements
+    const FE_SimplexP<dim> fe_map(1);
+    const MappingFE<dim> mapping(fe_map);
+
+    // Project initial displacement
+    VectorTools::project(mapping,
+                         dof_handler,
+                         constraints,
+                         QGaussSimplex<dim>(r + 1),
+                         *u_init,
+                         solution_owned);
+    
+    solution_owned.compress(VectorOperation::insert);
+    solution = solution_owned;
+    solution.compress(VectorOperation::insert);
+
+    // Project initial velocity
+    VectorTools::project(mapping,
+                         dof_handler,
+                         constraints,
+                         QGaussSimplex<dim>(r + 1),
+                         *v_init,
+                         velocity_owned);
+
+    velocity_owned.compress(VectorOperation::insert);
+    velocity = velocity_owned;
+    velocity.compress(VectorOperation::insert);
+
+    enforce_boundary_conditions_on_vector(solution_owned);
+    enforce_boundary_conditions_on_vector(velocity_owned);
 
     // Compute or project initial acceleration
     project_initial_acceleration();
@@ -790,6 +714,10 @@ void Wave::solve()
     // Save old acceleration for corrector step
     TrilinosWrappers::MPI::Vector acceleration_old(locally_owned_dofs, MPI_COMM_WORLD);
     acceleration_old = acceleration_owned;
+    TrilinosWrappers::MPI::Vector velocity_old(locally_owned_dofs, MPI_COMM_WORLD);
+    velocity_old = velocity_owned;
+    TrilinosWrappers::MPI::Vector solution_old(locally_owned_dofs, MPI_COMM_WORLD);
+    solution_old = solution_owned;
 
     // Assemble RHS (includes predictor for displacement)
     assemble_rhs(time);
@@ -799,78 +727,41 @@ void Wave::solve()
 
     // Corrector: update velocity
     // v_{n+1} = v^n + Δt·[(1-γ)·a^n + γ·a_{n+1}]
-    TrilinosWrappers::MPI::Vector velocity_old(locally_owned_dofs, MPI_COMM_WORLD);
-    velocity_old = velocity_owned;
-
     velocity_owned = velocity_old; // Start from v^n
     velocity_owned.add(deltat * (1.0 - gamma), acceleration_old);
     velocity_owned.add(deltat * gamma, acceleration_owned);
-    velocity = velocity_owned;
+
+    // velocity = velocity_owned;
 
     // Corrector: update displacement
     // u_{n+1} = u^n + Δt·v^n + Δt²·[(0.5-β)·a^n + β·a_{n+1}]
-    TrilinosWrappers::MPI::Vector solution_old(locally_owned_dofs, MPI_COMM_WORLD);
-    solution_old = solution_owned;
-
     solution_owned = solution_old; // Start from u^n
     solution_owned.add(deltat, velocity_old);
     solution_owned.add(deltat * deltat * (0.5 - beta), acceleration_old);
     solution_owned.add(deltat * deltat * beta, acceleration_owned);
+
+    // solution = solution_owned;
+
+    acceleration_owned.compress(VectorOperation::insert);
+    acceleration = acceleration_owned;
+    acceleration.compress(VectorOperation::insert);
+
+    velocity_owned.compress(VectorOperation::insert);
+    velocity = velocity_owned;
+    velocity.compress(VectorOperation::insert);
+
+    solution_owned.compress(VectorOperation::insert);
     solution = solution_owned;
+    solution.compress(VectorOperation::insert);
 
-    // Enforce boundary conditions on displacement and velocity after corrector
-    // This is necessary because even though a[i]=0 on boundary, u and v can drift
-    // due to numerical errors in the corrector formulas
-    if (use_manufactured_solution)
-    {
-      std::map<types::global_dof_index, double> boundary_values_u;
-      std::map<types::global_dof_index, double> boundary_values_v;
-
-      // Set time to current time for BC evaluation
-      exact_solution.set_time(time);
-      exact_velocity.set_time(time);
-
-      std::map<types::boundary_id, const Function<dim> *> boundary_functions_u;
-      std::map<types::boundary_id, const Function<dim> *> boundary_functions_v;
-
-      for (unsigned int i = 0; i < 4; ++i) // 2D: 4 boundaries instead of 6
-      {
-        boundary_functions_u[i] = &exact_solution;
-        boundary_functions_v[i] = &exact_velocity;
-      }
-
-      VectorTools::interpolate_boundary_values(dof_handler,
-                                               boundary_functions_u,
-                                               boundary_values_u);
-      VectorTools::interpolate_boundary_values(dof_handler,
-                                               boundary_functions_v,
-                                               boundary_values_v);
-
-      // Enforce u = g(t) on boundary
-      for (const auto &pair : boundary_values_u)
-      {
-        if (locally_owned_dofs.is_element(pair.first))
-          solution_owned(pair.first) = pair.second;
-      }
-      solution = solution_owned;
-
-      // Enforce v = g'(t) on boundary
-      for (const auto &pair : boundary_values_v)
-      {
-        if (locally_owned_dofs.is_element(pair.first))
-          velocity_owned(pair.first) = pair.second;
-      }
-      velocity = velocity_owned;
-    }
+    enforce_boundary_conditions_on_vector(solution_owned);
+    enforce_boundary_conditions_on_vector(velocity_owned);
 
     // Write output
     if (output_frequency == 0 || time_step % output_frequency == 0)
       output(time_step);
 
     write_time_series(time_step);
-
-    // Diagnostics
-    //diagnose_time_step(time_step, time);
 
     pcout << std::endl;
   }

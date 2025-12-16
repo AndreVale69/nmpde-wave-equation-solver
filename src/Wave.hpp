@@ -274,9 +274,8 @@ protected:
   void
   write_time_series(const unsigned int &time_step);
 
-  /// Diagnostic function to debug solver behavior
   void
-  diagnose_time_step(const unsigned int &time_step, const double &time);
+  enforce_boundary_conditions_on_vector(TrilinosWrappers::MPI::Vector &vec);
 
   // MPI parallelization ////////////////////////////////////////////////////////
 
