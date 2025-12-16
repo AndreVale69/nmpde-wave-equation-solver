@@ -3,6 +3,7 @@
 
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/exceptions.h>
+#include <deal.II/base/parameter_handler.h>
 #include <deal.II/base/quadrature_lib.h>
 
 #include <deal.II/distributed/fully_distributed_tria.h>
@@ -33,6 +34,7 @@
 #include <cstdlib>
 #include <filesystem>
 
+#include "parameters.hpp"
 #include "time_integrator.hpp"
 #include "time_scheme.hpp"
 
@@ -84,21 +86,18 @@ public:
 
     // Constructor. We provide the final time, time step Delta t and theta method
     // parameter as constructor arguments.
-    Wave(std::string         mesh_input_,
-         const unsigned int &r_,
-         const double       &T_,
-         const double       &deltat_,
-         const double       &theta_,
-         const TimeScheme   &time_scheme_)
-        : mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
+    explicit Wave(const std::string &parameters_file)
+        : parameters(Parameters(parameters_file))
+        , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
         , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
         , pcout(std::cout, mpi_rank == 0)
-        , T(T_)
-        , mesh_file_name(std::move(mesh_input_))
-        , r(r_)
-        , deltat(deltat_)
-        , theta(theta_)
-        , time_scheme(time_scheme_)
+        , T(parameters.T)
+        , mesh_file_name(parameters.mesh_file)
+        , r(parameters.degree)
+        , output_every(parameters.output_every)
+        , deltat(parameters.dt)
+        , theta(parameters.theta)
+        , time_scheme(parameters.scheme)
         , mesh(MPI_COMM_WORLD) {
         // If the user provided a .geo file, try to generate a .msh mesh file
         // using gmsh automatically.
@@ -120,6 +119,11 @@ protected:
 
     // Output.
     void output(const unsigned int &time_step) const;
+
+    // Problem parameters. ////////////////////////////////////////////////////////
+
+    // Parameters object.
+    Parameters parameters;
 
     // MPI parallel. /////////////////////////////////////////////////////////////
 
@@ -165,6 +169,9 @@ protected:
 
     // Polynomial degree.
     const unsigned int r;
+
+    // Output frequency (in time steps).
+    const unsigned int output_every = 10;
 
     // Time step.
     const double deltat;
