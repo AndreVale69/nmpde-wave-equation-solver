@@ -6,7 +6,14 @@
 void Wave::process_mesh_input() {
     try {
         std::filesystem::path p(mesh_file_name);
-        if (p.has_extension() && p.extension() == ".geo") {
+        if (!p.has_extension()) {
+            AssertThrow(false,
+                        ExcMessage("Mesh file name must have an extension (.msh or .geo): " +
+                                   mesh_file_name));
+        }
+        if (p.extension() == ".geo") {
+            pcout << "-----------------------------------------------" << std::endl;
+            pcout << "Generating mesh from .geo file using gmsh..." << std::endl;
             // Output mesh file: same name but .msh extension
             std::filesystem::path out = p;
             out.replace_extension(".msh");
@@ -24,6 +31,14 @@ void Wave::process_mesh_input() {
 
             // Replace the mesh file name with the generated mesh file
             mesh_file_name = out.string();
+            pcout << "  Mesh generated: " << mesh_file_name << std::endl;
+            pcout << "-----------------------------------------------" << std::endl;
+        } else if (p.extension() == ".msh") {
+            // Nothing to do
+        } else {
+            AssertThrow(false,
+                        ExcMessage("Unsupported mesh file extension (use .msh or .geo): " +
+                                   mesh_file_name));
         }
     } catch (const std::exception &e) {
         AssertThrow(false,
