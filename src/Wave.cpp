@@ -302,6 +302,8 @@ void Wave::solve() {
         time = t_np1;
         ++time_step;
 
-        output(time_step);
+        if (time_step % output_every == 0) {
+            output(time_step);
+        }
     }
 }
