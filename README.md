@@ -124,8 +124,9 @@ https://github.com/user-attachments/assets/0cf957e0-a38c-4df5-a5a9-6a82cba1ff15
 
 ## Inputs: parameter file & meshes
 
-- `wave.prm` — parameter file containing physical and numerical parameters (time step, final time, theta parameter, output frequency, etc.). Edit this file to change simulation settings.
-- `mesh/` — contains Gmsh geometry and mesh files. Provided files:
+- `wave.prm`: parameter file containing physical and numerical parameters
+  (time step, final time, theta parameter, output frequency, etc.). Edit this file to change simulation settings.
+- `mesh/`: contains Gmsh geometry and mesh files. Provided files:
   - `square_structured.geo` / `square_structured.msh`
   - `lshape.geo`
   - `square_unstructured.geo`
@@ -134,7 +135,7 @@ https://github.com/user-attachments/assets/0cf957e0-a38c-4df5-a5a9-6a82cba1ff15
 
 ## Parameters (`wave.prm`)
 
-This section documents the runtime parameters read from `wave.prm`.
+This section documents the runtime parameters read from [`wave.prm`][#3].
 The program uses deal.II's `ParameterHandler` and expects parameters organized in sections (subsections).
 Below are the recognized sections, keys, types, defaults and allowed values.
 
@@ -171,16 +172,17 @@ Below are the recognized sections, keys, types, defaults and allowed values.
 ## Source layout
 
 Top-level:
-- `CMakeLists.txt` — project build instructions
-- `wave.prm` — runtime parameter file
-- `mesh/` — meshes and gmsh scripts
-- `src/` — C++ source code
+- `CMakeLists.txt`: project build instructions
+- `mesh/`: meshes and gmsh scripts
+- `parameters/`: example parameter files
+- `src/`: C++ source code
 
 Key files in `src/` (high level):
-- `main.cpp` — program entry point and parameter parsing
-- `Wave.cpp`, `Wave.hpp` — main PDE solver class implementing assembly and time stepping
-- `time_integrator.hpp`, `theta_integrator.cpp/.hpp` — time-integration schemes and helpers
-- `parameters.hpp` — parameter parsing and storage
+- `main.cpp`: program entry point and parameter parsing
+- `Wave.cpp`, `Wave.hpp`: main PDE solver class implementing assembly and time stepping
+- `time_integrator.hpp`, `theta_integrator.cpp/.hpp`: time-integration schemes and helpers
+- `parameters.hpp`: parameter parsing and storage
 
 [#1]: https://www11.ceda.polimi.it/schedaincarico/schedaincarico/controller/scheda_pubblica/SchedaPublic.do?&evn_default=evento&c_classe=837285&__pj0=0&__pj1=5147aa88ed0802458f409c0048df93c8
 [#2]: https://www.paraview.org/
+[#3]: ./parameters/wave.prm

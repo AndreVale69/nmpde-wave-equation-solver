@@ -3,7 +3,7 @@
 // Main function.
 int main(int argc, char *argv[]) {
     // read wave_prm from command line if provided
-    std::string wave_prm = "../wave.prm";
+    std::string wave_prm = "../parameters/wave.prm";
     if (argc > 1) {
         wave_prm = argv[1];
     } else {
