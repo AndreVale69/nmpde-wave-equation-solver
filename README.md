@@ -1,20 +1,33 @@
-# Project 2: Wave Equation Solver using deal.II
+# Wave Equation Solver (deal.II)
+
+A compact finite-element solver for the 2D wave equation implemented using the deal.II library.
+This repository contains a project developed for the [Numerical Methods for PDEs course][#1].
+It implements spatial discretization with the finite element method and a family of implicit/explicit time integrators
+(theta-schemes) to simulate wave propagation on 2D domains.
 
 ## Table of Contents
-
 - [Overview](#overview)
 - [Problem Description](#problem-description)
-- [Professor Information](#professor-information)
-
----
+- [Quick start (build & run)](#quick-start-build--run)
+  - [Build](#build)
+  - [Run](#run)
+- [Example run and visualization](#example-run-and-visualization)
+- [Inputs: parameter file & meshes](#inputs-parameter-file--meshes)
+- [Parameters (`wave.prm`)](#parameters-waveprm)
+  - [Mesh](#mesh)
+  - [Time](#time)
+  - [Output](#output)
+- [Outputs](#outputs)
+- [Source layout](#source-layout)
+- [Development notes & suggestions](#development-notes--suggestions)
 
 ## Overview
 
-This project implements a finite element solver for the 2D wave equation using the deal.II library.
-The solver addresses the wave equation with specified boundary and initial conditions,
-allowing for the simulation of wave propagation in a defined domain.
-
-https://github.com/user-attachments/assets/0cf957e0-a38c-4df5-a5a9-6a82cba1ff15
+This project solves the second-order wave equation in 2D with Dirichlet boundary conditions and user-specified initial data.
+The implementation focuses on clarity and reproducibility for teaching and experimentation with:
+- Different spatial discretizations via deal.II finite element spaces.
+- Time integration based on theta-schemes (including explicit/implicit variants).
+- Exporting results in VTK format for visualization (VTU / PVTU).
 
 ---
 
@@ -28,7 +41,7 @@ Consider the wave equation in 2D [1, 2]:
 
 Implement a finite element solver for problem above. Discuss the choice of the time and space discretization methods,
 the properties of the chosen method (especially in terms of numerical dissipation and dispersion, see [1, 2])
-and the computational and algorithmic aspects of the solver. 
+and the computational and algorithmic aspects of the solver.
 
 \[1\]: A. Quarteroni. Numerical models for differential problems, volume 2. Springer, 2017.
 
@@ -36,28 +49,147 @@ and the computational and algorithmic aspects of the solver.
 
 ---
 
-## Professor Information
+## Quick start (build & run)
 
-### Organizing the source code
-Please place all your sources into the `src` folder.
+Prerequisites
+- Linux (instructions were written and tested on Linux environments). MacOS should work similarly. Windows is not officially supported.
+- A working deal.II installation. On HPC or cluster systems, load the appropriate modules (example used in class):
 
-Binary files must not be uploaded to the repository (including executables).
-
-Mesh files should not be uploaded to the repository. If applicable, upload `gmsh` scripts with suitable instructions to generate the meshes (and ideally a Makefile that runs those instructions). If not applicable, consider uploading the meshes to a different file sharing service, and providing a download link as part of the building and running instructions.
-
-### Compiling
-To build the executable, make sure you have loaded the needed modules with
 ```bash
-$ module load gcc-glibc dealii
+module load gcc-glibc dealii
 ```
-Then run the following commands:
+
+- CMake (version 3.12 or higher)
+- A C++ compiler with C++17 support
+- [ParaView][#2] (for visualization of results)
+
+> [!NOTE]
+> This repository contains optional "mk" helpers and a small set of shared CMake fragments that are used by
+> the Politecnico di Milano course infrastructure.
+> These are intended for students/staff who use the Politecnico `mk` tool and the course's common CMake files
+> (mk: https://github.com/pcafrica/mk and the course common CMake fragment
+> at https://github.com/michelebucelli/nmpde-labs-aa-25-26/blob/main/common/cmake-common.cmake).
+> If you are a standard user or just want to build with a normal CMake workflow,
+> you do not need `mk` nor the course-specific common CMake files; the instructions above are sufficient.
+> 
+> If the project fails to configure because it tries to include those course files,
+> open `CMakeLists.txt` and comment out or remove the lines that include or reference the course fragments
+> (look for lines that call `include(...)`, `find_package(...)`, or `add_subdirectory(...)`
+> pointing at the course/common cmake files).
+> After removing those references the project will configure and build with a regular CMake setup.
+
+
+### Build
+
+1. Create and enter a build directory:
+
 ```bash
-$ mkdir build
-$ cd build
-$ cmake ..
-$ make
+mkdir -p build
+cd build
+cmake ..
+make -j$(nproc)
 ```
-The executable will be created into `build`, and can be executed through
+
+The build will produce an executable in `build/`.
+The executable name depends on the CMake configuration; check the `CMakeLists.txt` if needed.
+
+### Run
+A parameter file `wave.prm` at the repository root controls most runtime options.
+From `build/` run the produced executable. Example (replace `executable-name` below with the binary generated by the build):
+
 ```bash
-$ ./executable-name
+./executable-name ../wave.prm
 ```
+
+If the program accepts no command-line parameter, it will typically look for `wave.prm` in the working directory.
+See `wave.prm` for available options.
+
+---
+
+## Example run and visualization
+
+1. Run the solver with the shipped parameter file. The solver writes VTK outputs into the `build/` directory (files like `output_000.0.vtu` and `output_000.pvtu`).
+2. Visualize results with ParaView:
+
+```bash
+paraview output_000.pvtu
+```
+
+Or open the PVTU in the ParaView GUI and play the time series.
+
+An example of visualization output is shown below:
+
+https://github.com/user-attachments/assets/0cf957e0-a38c-4df5-a5a9-6a82cba1ff15
+
+---
+
+## Inputs: parameter file & meshes
+
+- `wave.prm` — parameter file containing physical and numerical parameters (time step, final time, theta parameter, output frequency, etc.). Edit this file to change simulation settings.
+- `mesh/` — contains Gmsh geometry and mesh files. Provided files:
+  - `square_structured.geo` / `square_structured.msh`
+  - `lshape.geo`
+  - `square_unstructured.geo`
+
+---
+
+## Parameters (`wave.prm`)
+
+This section documents the runtime parameters read from `wave.prm`.
+The program uses deal.II's `ParameterHandler` and expects parameters organized in sections (subsections).
+Below are the recognized sections, keys, types, defaults and allowed values.
+
+### Mesh
+- `mesh_file` (string, default: `../mesh/square_structured.geo`). Path to a mesh or geometry file to load. Can be a:
+  - Gmsh geometry file (`.geo`) that will be meshed at runtime (requires Gmsh installed and in PATH).
+  - Gmsh mesh file (`.msh`) that will be read directly.
+- `degree` (integer, default: `1`). Polynomial degree of the finite element basis functions (e.g., 1 for linear elements).
+
+### Time
+- `T` (double, default: `1.0`). Final simulation time (the simulation stops at this time).
+- `dt` (double, default: `0.01`). Time step size.
+- `theta` (double, default: `1.0`, allowed range: `0.0`–`1.0`). Theta parameter for the theta integration scheme.
+  - `0` = explicit,
+  - `0.5` = Crank-Nicolson,
+  - `1` = implicit/backward Euler.
+- `scheme` (selection, default: `theta`, allowed values: `theta | central | newmark`). Time integration scheme to use:
+    - `theta` = general theta-scheme (uses `theta` parameter)
+    - `central` = central difference scheme
+    - `newmark` = Newmark method
+
+### Output
+- `every` (integer, default: `1`). Controls how often outputs are written (in time steps). For example, `every = 2` writes output every 2 steps.
+
+---
+
+## Outputs
+
+- Time-step VTK files: `output_###.0.vtu` and an index `output_###.pvtu` that ParaView can load as a time series.
+- Additional logging is printed to stdout depending on the chosen verbosity in `wave.prm`.
+
+---
+
+## Source layout
+
+Top-level:
+- `CMakeLists.txt` — project build instructions
+- `wave.prm` — runtime parameter file
+- `mesh/` — meshes and gmsh scripts
+- `src/` — C++ source code
+
+Key files in `src/` (high level):
+- `main.cpp` — program entry point and parameter parsing
+- `Wave.cpp`, `Wave.hpp` — main PDE solver class implementing assembly and time stepping
+- `time_integrator.hpp`, `theta_integrator.cpp/.hpp` — time-integration schemes and helpers
+- `parameters.hpp` — parameter parsing and storage
+
+---
+
+## Development notes & suggestions
+
+- To experiment with time integration, change the theta parameter in `wave.prm` (theta = 0 -> explicit, theta = 0.5 -> Crank-Nicolson, theta = 1 -> backward Euler).
+- For higher spatial accuracy, change the finite element degree in the source code or expose it as a `wave.prm` option.
+- Profiling: enabling optimized builds (`cmake -DCMAKE_BUILD_TYPE=Release ..`) will significantly reduce runtime for large meshes.
+
+[#1]: https://www11.ceda.polimi.it/schedaincarico/schedaincarico/controller/scheda_pubblica/SchedaPublic.do?&evn_default=evento&c_classe=837285&__pj0=0&__pj1=5147aa88ed0802458f409c0048df93c8
+[#2]: https://www.paraview.org/
