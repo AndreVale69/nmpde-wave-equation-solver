@@ -9,7 +9,7 @@
 
 void Wave::process_mesh_input() {
     try {
-        std::filesystem::path p(mesh_file_name);
+        const std::filesystem::path p(mesh_file_name);
         if (!p.has_extension()) {
             AssertThrow(false,
                         ExcMessage("Mesh file name must have an extension (.msh or .geo): " +
