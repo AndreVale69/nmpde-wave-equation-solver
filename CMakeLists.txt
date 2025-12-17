@@ -101,5 +101,6 @@ add_executable(
         src/theta_integrator.cpp
         src/time_scheme.hpp
         src/parameters.hpp
+        src/progress_bar.hpp
 )
 deal_ii_setup_target(nm4pde)
