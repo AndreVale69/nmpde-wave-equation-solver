@@ -1,7 +1,11 @@
 #include "Wave.hpp"
 
+#include "progress_bar.hpp"
 #include "theta_integrator.hpp"
 #include "time_integrator.hpp"
+
+#include <iomanip>
+#include <sstream>
 
 void Wave::process_mesh_input() {
     try {
@@ -269,41 +273,44 @@ void Wave::solve() {
         pcout << "-----------------------------------------------" << std::endl;
     }
 
-    unsigned int time_step = 0;
-    double       time      = 0;
+    ProgressBar progress(&pcout);
+    progress.for_while(
+            [&](const unsigned int step) -> bool {
+                // step is 1-based: t_n = (step-1)*deltat, t_np1 = step*deltat
+                const double t_n   = (static_cast<double>(step) - 1.0) * deltat;
+                const double t_np1 = static_cast<double>(step) * deltat;
 
-    while (time < T) {
-        const double t_n   = time;
-        const double t_np1 = time + deltat;
+                // 1. Assemble the right-hand side at time step n
+                assemble_rhs(t_n, forcing_n); // F^n
+                assemble_rhs(t_np1, forcing_np1); // F^{n+1}
 
-        pcout << "n = " << std::setw(3) << time_step + 1 << ", t = " << std::setw(5) << t_np1 << ":"
-              << std::flush << std::endl;
+                time_integrator->advance(t_n,
+                                         deltat,
+                                         mass_matrix,
+                                         stiffness_matrix,
+                                         forcing_n,
+                                         forcing_np1,
+                                         solution_owned,
+                                         velocity_owned);
 
-        // 1. Assemble the right-hand side at time step n
-        assemble_rhs(t_n, forcing_n); // F^n
-        assemble_rhs(t_np1, forcing_np1); // F^{n+1}
+                // 3. Update ghosted vectors for output
+                solution = solution_owned;
+                solution.update_ghost_values();
 
-        time_integrator->advance(t_n,
-                                 deltat,
-                                 mass_matrix,
-                                 stiffness_matrix,
-                                 forcing_n,
-                                 forcing_np1,
-                                 solution_owned,
-                                 velocity_owned);
+                velocity = velocity_owned;
+                velocity.update_ghost_values();
 
-        // 3. Update ghosted vectors for output
-        solution = solution_owned;
-        solution.update_ghost_values();
+                if (step % output_every == 0) {
+                    output(step);
+                }
 
-        velocity = velocity_owned;
-        velocity.update_ghost_values();
-
-        time = t_np1;
-        ++time_step;
-
-        if (time_step % output_every == 0) {
-            output(time_step);
-        }
-    }
+                return t_np1 < T;
+            },
+            "Time-stepping progress",
+            [&](const unsigned int step) -> std::string {
+                std::ostringstream oss;
+                const double       t_show = static_cast<double>(step) * deltat; // end of this step
+                oss << "t=" << std::fixed << std::setprecision(5) << t_show;
+                return oss.str();
+            });
 }
