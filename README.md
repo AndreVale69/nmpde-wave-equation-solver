@@ -183,13 +183,5 @@ Key files in `src/` (high level):
 - `time_integrator.hpp`, `theta_integrator.cpp/.hpp` — time-integration schemes and helpers
 - `parameters.hpp` — parameter parsing and storage
 
----
-
-## Development notes & suggestions
-
-- To experiment with time integration, change the theta parameter in `wave.prm` (theta = 0 -> explicit, theta = 0.5 -> Crank-Nicolson, theta = 1 -> backward Euler).
-- For higher spatial accuracy, change the finite element degree in the source code or expose it as a `wave.prm` option.
-- Profiling: enabling optimized builds (`cmake -DCMAKE_BUILD_TYPE=Release ..`) will significantly reduce runtime for large meshes.
-
 [#1]: https://www11.ceda.polimi.it/schedaincarico/schedaincarico/controller/scheda_pubblica/SchedaPublic.do?&evn_default=evento&c_classe=837285&__pj0=0&__pj1=5147aa88ed0802458f409c0048df93c8
 [#2]: https://www.paraview.org/
