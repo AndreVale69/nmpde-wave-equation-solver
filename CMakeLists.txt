@@ -99,7 +99,7 @@ add_executable(
         src/time_integrator.hpp
         src/theta_integrator.hpp
         src/theta_integrator.cpp
-        src/time_scheme.hpp
+        src/enum/time_scheme.hpp
         src/parameters.hpp
         src/progress_bar.hpp
 )

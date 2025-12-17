@@ -4,7 +4,7 @@
 #include <deal.II/base/parameter_handler.h>
 #include <filesystem>
 
-#include "time_scheme.hpp"
+#include "enum/time_scheme.hpp"
 
 /**
  * @brief Structure to hold simulation parameters.
