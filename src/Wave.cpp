@@ -260,6 +260,10 @@ void Wave::solve() {
     {
         pcout << "Applying the initial conditions" << std::endl;
 
+        // Set time to 0 for initial conditions
+        u_0.set_time(0.0);
+        v_0.set_time(0.0);
+
         // U^0
         VectorTools::interpolate(dof_handler, u_0, solution_owned);
         solution = solution_owned;
