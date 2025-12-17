@@ -205,15 +205,15 @@ void Wave::assemble_rhs(const double &time, TrilinosWrappers::MPI::Vector &F_out
 
     F_out = 0.0;
 
+    // Set the time for the forcing term function.
+    forcing_term.set_time(time);
+
     for (const auto &cell: dof_handler.active_cell_iterators()) {
         if (!cell->is_locally_owned())
             continue;
 
         fe_values.reinit(cell);
         cell_rhs = 0.0;
-
-        // Compute f at this time
-        forcing_term.set_time(time);
 
         for (unsigned int q = 0; q < n_q; ++q) {
             const double f_loc = forcing_term.value(fe_values.quadrature_point(q));
