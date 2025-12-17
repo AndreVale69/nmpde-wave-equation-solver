@@ -19,7 +19,6 @@ It implements spatial discretization with the finite element method and a family
   - [Output](#output)
 - [Outputs](#outputs)
 - [Source layout](#source-layout)
-- [Development notes & suggestions](#development-notes--suggestions)
 
 ## Overview
 
