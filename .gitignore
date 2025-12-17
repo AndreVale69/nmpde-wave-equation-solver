@@ -38,4 +38,11 @@
 .idea/
 *.code-workspace
 
-*/build/*
+# CMake
+*/cmake-build-debug/*
+*/.cmake/*
+*/CMakeFiles/*
+build/*
+
+# generated meshes
+*.msh

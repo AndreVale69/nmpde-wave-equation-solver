@@ -2,6 +2,8 @@
 #define HEAT_HPP
 
 #include <deal.II/base/conditional_ostream.h>
+#include <deal.II/base/exceptions.h>
+#include <deal.II/base/parameter_handler.h>
 #include <deal.II/base/quadrature_lib.h>
 
 #include <deal.II/distributed/fully_distributed_tria.h>
@@ -27,195 +29,206 @@
 
 #include <fstream>
 #include <iostream>
+#include <utility>
+
+#include <cstdlib>
+#include <filesystem>
+
+#include "parameters.hpp"
+#include "time_integrator.hpp"
+#include "time_scheme.hpp"
 
 using namespace dealii;
 
+class TimeIntegrator;
+
 // Class representing the non-linear diffusion problem.
-class Wave
-{
+class Wave {
 public:
-  // Physical dimension (1D, 2D, 3D)
-  static constexpr unsigned int dim = 2;
+    // Physical dimension (1D, 2D, 3D)
+    static constexpr unsigned int dim = 2;
 
-  // Function for the mu coefficient.
-  class FunctionMu : public Function<dim>
-  {
-  public:
-    virtual double
-    value(const Point<dim> & /*p*/,
-          const unsigned int /*component*/ = 0) const override
-    {
-      return 1;
+    // Function for the mu coefficient.
+    class FunctionMu : public Function<dim> {
+    public:
+        double value(const Point<dim> & /*p*/,
+                     const unsigned int /*component*/ = 0) const override {
+            return 1;
+        }
+    };
+
+    // Function for the forcing term.
+    class ForcingTerm : public Function<dim> {
+    public:
+        double value(const Point<dim> & /*p*/,
+                     const unsigned int /*component*/ = 0) const override {
+            return 0.0;
+        }
+    };
+
+    // Function for the initial condition.
+    class FunctionU0 : public Function<dim> {
+    public:
+        double value(const Point<dim> &p, const unsigned int /*component*/ = 0) const override {
+            return p[0] * (1.0 - p[0]) * p[1] * (1.0 - p[1]);
+        }
+    };
+
+    // Function for the initial velocity.
+    class FunctionV0 : public Function<dim> {
+    public:
+        double value(const Point<dim> & /*p*/,
+                     const unsigned int /*component*/ = 0) const override {
+            return 0.0;
+        }
+    };
+
+
+    // Constructor. We provide the final time, time step Delta t and theta method
+    // parameter as constructor arguments.
+    explicit Wave(const std::string &parameters_file)
+        : parameters(Parameters(parameters_file))
+        , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
+        , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
+        , pcout(std::cout, mpi_rank == 0)
+        , T(parameters.T)
+        , mesh_file_name(parameters.mesh_file)
+        , r(parameters.degree)
+        , output_every(parameters.output_every)
+        , deltat(parameters.dt)
+        , theta(parameters.theta)
+        , time_scheme(parameters.scheme)
+        , mesh(MPI_COMM_WORLD) {
+        // If the user provided a .geo file, try to generate a .msh mesh file
+        // using gmsh automatically.
+        process_mesh_input();
     }
-  };
 
-  // Function for the forcing term.
-  class ForcingTerm : public Function<dim>
-  {
-  public:
-    virtual double
-    value(const Point<dim> & /*p*/,
-          const unsigned int /*component*/ = 0) const override
-    {
-      return 0.0;
-    }
-  };
+    // Initialization.
+    void setup();
 
-  // Function for the initial condition.
-  class FunctionU0 : public Function<dim>
-  {
-  public:
-    virtual double
-    value(const Point<dim> &p,
-          const unsigned int /*component*/ = 0) const override
-    {
-      return p[0] * (1.0 - p[0]) * p[1] * (1.0 - p[1]) * p[2] * (1.0 - p[2]);
-    }
-  };
-
-  // Function for the initial velocity.
-  class FunctionV0 : public Function<dim>
-  {
-  public:
-    virtual double
-    value(const Point<dim> &/*p*/,
-          const unsigned int /*component*/ = 0) const override
-    {
-      return 0.0;
-    }
-  };
-
-
-  // Constructor. We provide the final time, time step Delta t and theta method
-  // parameter as constructor arguments.
-  Wave(const std::string  &mesh_file_name_,
-       const unsigned int &r_,
-       const double       &T_,
-       const double       &deltat_,
-       const double       &theta_)
-    : mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
-    , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
-    , pcout(std::cout, mpi_rank == 0)
-    , T(T_)
-    , mesh_file_name(mesh_file_name_)
-    , r(r_)
-    , deltat(deltat_)
-    , theta(theta_)
-    , mesh(MPI_COMM_WORLD)
-  {}
-
-  // Initialization.
-  void
-  setup();
-
-  // Solve the problem.
-  void
-  solve();
+    // Solve the problem.
+    void solve();
 
 protected:
-  // Assemble the mass and stiffness matrices.
-  void
-  assemble_matrices();
+    // Assemble the mass and stiffness matrices.
+    void assemble_matrices();
 
-  // Assemble the right-hand side of the problem.
-  void
-  assemble_rhs(const double &time);
+    // Assemble the right-hand side of the problem.
+    void assemble_rhs(const double &time, TrilinosWrappers::MPI::Vector &F_out);
 
-  // Solve the problem for one time step.
-  void
-  solve_time_step();
+    // Output.
+    void output(const unsigned int &time_step) const;
 
-  // Output.
-  void
-  output(const unsigned int &time_step) const;
+    // Problem parameters. ////////////////////////////////////////////////////////
 
-  // MPI parallel. /////////////////////////////////////////////////////////////
+    // Parameters object.
+    Parameters parameters;
 
-  // Number of MPI processes.
-  const unsigned int mpi_size;
+    // MPI parallel. /////////////////////////////////////////////////////////////
 
-  // This MPI process.
-  const unsigned int mpi_rank;
+    // Number of MPI processes.
+    const unsigned int mpi_size;
 
-  // Parallel output stream.
-  ConditionalOStream pcout;
+    // This MPI process.
+    const unsigned int mpi_rank;
 
-  // Problem definition. ///////////////////////////////////////////////////////
+    // Parallel output stream.
+    ConditionalOStream pcout;
 
-  // mu coefficient.
-  FunctionMu mu;
+    // Problem definition. ///////////////////////////////////////////////////////
 
-  // Forcing term.
-  ForcingTerm forcing_term;
+    // mu coefficient.
+    FunctionMu mu;
 
-  // Initial condition.
-  FunctionU0 u_0;
+    // Forcing term.
+    ForcingTerm forcing_term;
 
-  // Initial condition for the velocity.
-  FunctionV0 v_0;
+    // Forcing vectors at time n.
+    TrilinosWrappers::MPI::Vector forcing_n;
 
-  // Final time.
-  const double T;
+    // Forcing vectors at time n+1.
+    TrilinosWrappers::MPI::Vector forcing_np1;
 
-  // Discretization. ///////////////////////////////////////////////////////////
+    // Initial condition.
+    FunctionU0 u_0;
 
-  // Mesh file name.
-  const std::string mesh_file_name;
+    // Initial condition for the velocity.
+    FunctionV0 v_0;
 
-  // Polynomial degree.
-  const unsigned int r;
+    // Final time.
+    const double T;
 
-  // Time step.
-  const double deltat;
+    // Discretization. ///////////////////////////////////////////////////////////
 
-  // Theta parameter of the theta method.
-  const double theta;
+    /**
+     * Mesh file name (input). Can be a .msh or .geo file. If it is a .geo file,
+     * gmsh will be called to generate a .msh mesh file.
+     */
+    std::string mesh_file_name;
 
-  // Mesh.
-  parallel::fullydistributed::Triangulation<dim> mesh;
+    // Polynomial degree.
+    const unsigned int r;
 
-  // Finite element space.
-  std::unique_ptr<FiniteElement<dim>> fe;
+    // Output frequency (in time steps).
+    const unsigned int output_every = 10;
 
-  // Quadrature formula.
-  std::unique_ptr<Quadrature<dim>> quadrature;
+    // Time step.
+    const double deltat;
 
-  // DoF handler.
-  DoFHandler<dim> dof_handler;
+    // Theta parameter of the theta method.
+    const double theta;
 
-  // DoFs owned by current process.
-  IndexSet locally_owned_dofs;
+    // Time integration scheme.
+    const TimeScheme time_scheme;
 
-  // DoFs relevant to the current process (including ghost DoFs).
-  IndexSet locally_relevant_dofs;
+    // Time integrator.
+    std::unique_ptr<TimeIntegrator> time_integrator;
 
-  // Mass matrix M
-  TrilinosWrappers::SparseMatrix mass_matrix;
+    // Mesh.
+    parallel::fullydistributed::Triangulation<dim> mesh;
 
-  // Stiffness matrix A.
-  TrilinosWrappers::SparseMatrix stiffness_matrix;
+    // Finite element space.
+    std::unique_ptr<FiniteElement<dim>> fe;
 
-  // Matrix on the left-hand side (M / deltat + theta A).
-  TrilinosWrappers::SparseMatrix lhs_matrix;
+    // Quadrature formula.
+    std::unique_ptr<Quadrature<dim>> quadrature;
 
-  // Matrix on the right-hand side (M / deltat - (1 - theta) A).
-  TrilinosWrappers::SparseMatrix rhs_matrix;
+    // DoF handler.
+    DoFHandler<dim> dof_handler;
 
-  // Right-hand side vector in the linear system.
-  TrilinosWrappers::MPI::Vector system_rhs;
+    // DoFs owned by current process.
+    IndexSet locally_owned_dofs;
 
-  // System solution (without ghost elements).
-  TrilinosWrappers::MPI::Vector solution_owned;
+    // DoFs relevant to the current process (including ghost DoFs).
+    IndexSet locally_relevant_dofs;
 
-  // Displacement (including ghost elements) = u^n.
-  TrilinosWrappers::MPI::Vector solution;
+    // Mass matrix M
+    TrilinosWrappers::SparseMatrix mass_matrix;
 
-  // Velocity (without ghost elements) = v^n.
-  TrilinosWrappers::MPI::Vector velocity_owned;
+    // Stiffness matrix A.
+    TrilinosWrappers::SparseMatrix stiffness_matrix;
 
-  // Velocity (including ghost elements).
-  TrilinosWrappers::MPI::Vector velocity;
+    // Right-hand side vector in the linear system.
+    TrilinosWrappers::MPI::Vector system_rhs;
 
+    // System solution (without ghost elements).
+    TrilinosWrappers::MPI::Vector solution_owned;
+
+    // Displacement (including ghost elements) = u^n.
+    TrilinosWrappers::MPI::Vector solution;
+
+    // Velocity (without ghost elements) = v^n.
+    TrilinosWrappers::MPI::Vector velocity_owned;
+
+    // Velocity (including ghost elements).
+    TrilinosWrappers::MPI::Vector velocity;
+
+    /**
+     * Process the mesh input file. If it is a .geo file, attempt to generate
+     * a .msh mesh file using gmsh and update the mesh_file_name accordingly.
+     */
+    void process_mesh_input();
 };
 
 #endif // HEAT_HPP

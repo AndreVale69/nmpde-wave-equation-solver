@@ -1,0 +1,15 @@
+subsection Mesh
+  set mesh_file = ../mesh/square_structured.geo
+  set degree    = 1
+end
+
+subsection Time
+  set T      = 1.0
+  set dt     = 0.01
+  set theta  = 1.0
+  set scheme = theta
+end
+
+subsection Output
+  set every = 1
+end
