@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.12)
 # Project name and language.
 project(nm4pde LANGUAGES CXX C)
 
-# Add MK modules path.
+# Add MK modules path (https://github.com/pcafrica/mk).
 # 1) gcc-glibc/11.2.0  11) eigen/3.3.9      21) scipy/1.7.0
 # 2) adol-c/2.7.2      12) glpk/5.0         22) scotch/6.1.1
 # 3) arborx/1.5        13) superlu/5.3.0    23) openblas/0.3.15
@@ -14,6 +14,11 @@ project(nm4pde LANGUAGES CXX C)
 # 8) petsc/3.15.1      18) netcdf/4.9.2     28) dealii/9.5.1
 # 9) blacs/1.1         19) pnetcdf/1.12.3
 # 10) boost/1.76.0     20) scalapack/2.1.0
+#
+# Optional: MK-specific include path list for Politecnico environment.
+# These absolute include directories come from the Politecnico "mk" environment
+# and the HPC module layout. Standard users building with system-installed
+# libraries can comment out or remove this block if it's not applicable.
 include_directories(
         # gcc
         /u/sw/toolchains/gcc-glibc/11.2.0/base/include
@@ -48,8 +53,16 @@ include_directories(
         /u/sw/toolchains/gcc-glibc/11.2.0/pkgs/dealii/9.5.1/include
 )
 
-# Include common CMake settings.
-include(${CMAKE_CURRENT_LIST_DIR}/../common/cmake-common.cmake)
+# Include common CMake settings if present (Politecnico course fragment).
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../common/cmake-common.cmake")
+    include(${CMAKE_CURRENT_LIST_DIR}/../common/cmake-common.cmake)
+else()
+    message(STATUS "Course common CMake fragment not found; continuing with a standard CMake setup.")
+    # If you want to remove course-specific references entirely, open this file
+    # and delete or comment out the include above. Standard CMake-based builds
+    # will still work with system-installed dependencies and a proper
+    # environment (CMAKE_PREFIX_PATH, DEAL_II_DIR, BOOST_ROOT, etc.).
+endif()
 
 # Locate MPI compiler.
 find_package(MPI REQUIRED)
