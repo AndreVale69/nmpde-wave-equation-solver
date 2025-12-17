@@ -52,10 +52,10 @@ struct Parameters {
      * @param filename Input file name.
      */
     explicit Parameters(const std::string &filename)
-        : mpi_rank(dealii::Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
+        : mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
         , pcout(std::cout, mpi_rank == 0) {
         pcout << "Reading parameters from file: " << filename << std::endl;
-        dealii::ParameterHandler prm;
+        ParameterHandler prm;
         declare(prm);
         parse(prm, filename);
     }
@@ -69,7 +69,7 @@ private:
     /**
      * @brief Parallel output stream.
      */
-    dealii::ConditionalOStream pcout;
+    ConditionalOStream pcout;
 
     /**
      * @brief Default mesh file path.
@@ -90,26 +90,26 @@ private:
      * @brief Declare parameters in the given ParameterHandler.
      * @param prm ParameterHandler object to declare parameters in.
      */
-    static void declare(dealii::ParameterHandler &prm) {
+    static void declare(ParameterHandler &prm) {
         prm.enter_subsection("Mesh");
         {
-            prm.declare_entry("mesh_file", kDefaultMeshFile, dealii::Patterns::Anything());
-            prm.declare_entry("degree", "1", dealii::Patterns::Integer(1));
+            prm.declare_entry("mesh_file", kDefaultMeshFile, Patterns::Anything());
+            prm.declare_entry("degree", "1", Patterns::Integer(1));
         }
         prm.leave_subsection();
 
         prm.enter_subsection("Time");
         {
-            prm.declare_entry("T", "1.0", dealii::Patterns::Double(0.0));
-            prm.declare_entry("dt", "0.01", dealii::Patterns::Double(0.0));
-            prm.declare_entry("theta", "1.0", dealii::Patterns::Double(0.0, 1.0));
-            prm.declare_entry("scheme", "theta", dealii::Patterns::Selection(kSelectionTimeScheme));
+            prm.declare_entry("T", "1.0", Patterns::Double(0.0));
+            prm.declare_entry("dt", "0.01", Patterns::Double(0.0));
+            prm.declare_entry("theta", "1.0", Patterns::Double(0.0, 1.0));
+            prm.declare_entry("scheme", "theta", Patterns::Selection(kSelectionTimeScheme));
         }
         prm.leave_subsection();
 
         prm.enter_subsection("Output");
         {
-            prm.declare_entry("every", "1", dealii::Patterns::Integer(1));
+            prm.declare_entry("every", "1", Patterns::Integer(1));
         }
         prm.leave_subsection();
     }
@@ -119,7 +119,7 @@ private:
      * @param prm ParameterHandler object to populate.
      * @param filename Input file name to read parameters from.
      */
-    void parse(dealii::ParameterHandler &prm, const std::string &filename) {
+    void parse(ParameterHandler &prm, const std::string &filename) {
         prm.parse_input(filename);
 
         prm.enter_subsection("Mesh");
