@@ -103,4 +103,7 @@ add_executable(
         src/parameters.hpp
         src/progress_bar.hpp
 )
+
+target_include_directories(nm4pde PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
 deal_ii_setup_target(nm4pde)
