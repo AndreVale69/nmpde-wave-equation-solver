@@ -1,5 +1,6 @@
 subsection Problem
-  set type = physical
+  set type = mms
+  set mms_omega = 1.0
 end
 
 subsection Boundary condition
@@ -14,7 +15,7 @@ end
 subsection Time
   set T      = 1.0
   set dt     = 0.01
-  set theta  = 1.0
+  set theta  = 0.5
   set scheme = theta
 end
 
