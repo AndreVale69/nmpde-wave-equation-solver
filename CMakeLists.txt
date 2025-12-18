@@ -95,13 +95,7 @@ add_executable(
         nm4pde
         src/main.cpp
         src/Wave.cpp
-        src/Wave.hpp
-        src/time_integrator.hpp
-        src/theta_integrator.hpp
         src/theta_integrator.cpp
-        src/enum/time_scheme.hpp
-        src/parameters.hpp
-        src/progress_bar.hpp
 )
 
 target_include_directories(nm4pde PRIVATE ${CMAKE_SOURCE_DIR}/include)
