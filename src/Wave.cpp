@@ -51,6 +51,14 @@ void Wave::process_mesh_input() {
 }
 
 void Wave::setup() {
+    pcout << "===============================================" << std::endl;
+
+    // Set up the problem.
+    {
+        pcout << "Setting up the problem" << std::endl;
+        parameters.initialize_problem<dim>(mu, boundary_g, forcing_term, u_0, v_0);
+    }
+
     // Create the mesh.
     {
         pcout << "Initializing the mesh" << std::endl;
@@ -96,6 +104,18 @@ void Wave::setup() {
 
         locally_owned_dofs    = dof_handler.locally_owned_dofs();
         locally_relevant_dofs = DoFTools::extract_locally_relevant_dofs(dof_handler);
+
+        // Identify boundary IDs.
+        boundary_ids.clear();
+        // Iterate over all active cells.
+        for (const auto &cell: dof_handler.active_cell_iterators())
+            // Only consider locally owned cells.
+            if (cell->is_locally_owned())
+                // Check each face of the cell.
+                for (unsigned int f = 0; f < cell->n_faces(); ++f)
+                    // If the face is at the boundary, store its boundary ID.
+                    if (cell->face(f)->at_boundary())
+                        boundary_ids.insert(cell->face(f)->boundary_id());
 
         pcout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
     }
@@ -229,6 +249,26 @@ void Wave::assemble_rhs(const double &time, TrilinosWrappers::MPI::Vector &F_out
     F_out.compress(VectorOperation::add);
 }
 
+void Wave::make_dirichlet_constraints(const double &time, AffineConstraints<> &constraints) const {
+    // Clear previous constraints
+    constraints.clear();
+
+    // Initialize constraints with locally relevant DoFs
+    constraints.reinit(locally_relevant_dofs);
+
+    // Handle hanging nodes (i.e., non-conforming meshes)
+    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+
+    // Set the time for the boundary condition function
+    boundary_g->set_time(time);
+
+    // Apply Dirichlet boundary conditions for all boundary faces
+    for (const auto id: boundary_ids)
+        VectorTools::interpolate_boundary_values(dof_handler, id, *boundary_g, constraints);
+
+    constraints.close();
+}
+
 void Wave::output(const unsigned int &time_step) const {
     DataOut<dim> data_out;
     data_out.add_data_vector(dof_handler, solution, "u");
@@ -268,6 +308,11 @@ void Wave::solve() {
         VectorTools::interpolate(dof_handler, u_0, solution_owned);
         solution = solution_owned;
 
+        // Apply Dirichlet constraints to initial displacement
+        AffineConstraints<> constraints_u0;
+        make_dirichlet_constraints(0.0, constraints_u0);
+        constraints_u0.distribute(solution_owned);
+
         // V^0
         VectorTools::interpolate(dof_handler, v_0, velocity_owned);
         velocity = velocity_owned;
@@ -277,7 +322,7 @@ void Wave::solve() {
         pcout << "-----------------------------------------------" << std::endl;
     }
 
-    ProgressBar progress(&pcout);
+    ProgressBar progress(static_cast<unsigned int>(std::ceil(T / deltat)), MPI_COMM_WORLD, &pcout);
     progress.for_while(
             [&](const unsigned int step) -> bool {
                 // step is 1-based: t_n = (step-1)*deltat, t_np1 = step*deltat
@@ -288,6 +333,11 @@ void Wave::solve() {
                 assemble_rhs(t_n, forcing_n); // F^n
                 assemble_rhs(t_np1, forcing_np1); // F^{n+1}
 
+                // 2. Create Dirichlet constraints at time step n+1
+                AffineConstraints<> constraints_u_np1;
+                make_dirichlet_constraints(t_np1, constraints_u_np1);
+
+                // 3. Advance the solution to time step n+1
                 time_integrator->advance(t_n,
                                          deltat,
                                          mass_matrix,
@@ -297,7 +347,11 @@ void Wave::solve() {
                                          solution_owned,
                                          velocity_owned);
 
-                // 3. Update ghosted vectors for output
+                // 4. Apply Dirichlet constraints to the new solution
+                constraints_u_np1.distribute(solution_owned);
+
+
+                // 5. Update ghosted vectors for output
                 solution = solution_owned;
                 solution.update_ghost_values();
 

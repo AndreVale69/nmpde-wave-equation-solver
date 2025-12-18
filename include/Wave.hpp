@@ -3,6 +3,7 @@
 
 #include <deal.II/base/conditional_ostream.h>
 #include <deal.II/base/exceptions.h>
+#include <deal.II/base/function_parser.h>
 #include <deal.II/base/parameter_handler.h>
 #include <deal.II/base/quadrature_lib.h>
 
@@ -35,6 +36,7 @@
 #include <filesystem>
 
 #include "enum/time_scheme.hpp"
+#include "mms_functions.hpp"
 #include "parameters.hpp"
 #include "time_integrator.hpp"
 
@@ -48,42 +50,6 @@ public:
     // Physical dimension (1D, 2D, 3D)
     static constexpr unsigned int dim = 2;
 
-    // Function for the mu coefficient.
-    class FunctionMu : public Function<dim> {
-    public:
-        double value(const Point<dim> & /*p*/,
-                     const unsigned int /*component*/ = 0) const override {
-            return 1;
-        }
-    };
-
-    // Function for the forcing term.
-    class ForcingTerm : public Function<dim> {
-    public:
-        double value(const Point<dim> & /*p*/,
-                     const unsigned int /*component*/ = 0) const override {
-            return 0.0;
-        }
-    };
-
-    // Function for the initial condition.
-    class FunctionU0 : public Function<dim> {
-    public:
-        double value(const Point<dim> &p, const unsigned int /*component*/ = 0) const override {
-            return p[0] * (1.0 - p[0]) * p[1] * (1.0 - p[1]);
-        }
-    };
-
-    // Function for the initial velocity.
-    class FunctionV0 : public Function<dim> {
-    public:
-        double value(const Point<dim> & /*p*/,
-                     const unsigned int /*component*/ = 0) const override {
-            return 0.0;
-        }
-    };
-
-
     // Constructor. We provide the final time, time step Delta t and theta method
     // parameter as constructor arguments.
     explicit Wave(const std::string &parameters_file)
@@ -91,13 +57,13 @@ public:
         , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
         , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
         , pcout(std::cout, mpi_rank == 0)
-        , T(parameters.T)
-        , mesh_file_name(parameters.mesh_file)
-        , r(parameters.degree)
-        , output_every(parameters.output_every)
-        , deltat(parameters.dt)
-        , theta(parameters.theta)
-        , time_scheme(parameters.scheme)
+        , T(parameters.time.T)
+        , mesh_file_name(parameters.mesh.mesh_file)
+        , r(parameters.mesh.degree)
+        , output_every(parameters.output.output_every)
+        , deltat(parameters.time.dt)
+        , theta(parameters.time.theta)
+        , time_scheme(parameters.time.scheme)
         , mesh(MPI_COMM_WORLD) {
         // If the user provided a .geo file, try to generate a .msh mesh file
         // using gmsh automatically.
@@ -116,6 +82,9 @@ protected:
 
     // Assemble the right-hand side of the problem.
     void assemble_rhs(const double &time, TrilinosWrappers::MPI::Vector &F_out);
+
+    // Apply Dirichlet boundary conditions.
+    void make_dirichlet_constraints(const double &time, AffineConstraints<> &constraints) const;
 
     // Output.
     void output(const unsigned int &time_step) const;
@@ -139,10 +108,16 @@ protected:
     // Problem definition. ///////////////////////////////////////////////////////
 
     // mu coefficient.
-    FunctionMu mu;
+    FunctionParser<dim> mu;
+
+    // Boundary condition g.
+    std::unique_ptr<Function<dim>> boundary_g;
+
+    // Boundary IDs where Dirichlet BCs are applied.
+    std::set<types::boundary_id> boundary_ids;
 
     // Forcing term.
-    ForcingTerm forcing_term;
+    FunctionParser<dim> forcing_term;
 
     // Forcing vectors at time n.
     TrilinosWrappers::MPI::Vector forcing_n;
@@ -151,13 +126,19 @@ protected:
     TrilinosWrappers::MPI::Vector forcing_np1;
 
     // Initial condition.
-    FunctionU0 u_0;
+    FunctionParser<dim> u_0;
 
     // Initial condition for the velocity.
-    FunctionV0 v_0;
+    FunctionParser<dim> v_0;
 
     // Final time.
     const double T;
+
+    // Manufactured solutions (MMS). /////////////////////////////////////////////
+
+    ManufacturedSolution<dim> u_exact;
+    ManufacturedVelocity<dim> v_exact;
+    ManufacturedForcing<dim>  f_mms;
 
     // Discretization. ///////////////////////////////////////////////////////////
 
