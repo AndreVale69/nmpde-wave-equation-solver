@@ -4,8 +4,13 @@
 #include "theta_integrator.hpp"
 #include "time_integrator.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <fstream>
 #include <iomanip>
+#include <numeric>
 #include <sstream>
+#include <string>
 
 void Wave::process_mesh_input() {
     try {
@@ -345,6 +350,174 @@ std::pair<double, double> Wave::compute_errors(const double time) {
     return {std::sqrt(global_u_sq), std::sqrt(global_v_sq)};
 }
 
+Wave::ErrorStatistics Wave::compute_error_statistics(const std::vector<double> &errors) {
+    ErrorStatistics stats{};
+    // If no errors, return zeros (already zero-initialized)
+    if (errors.empty())
+        return stats;
+
+    const size_t        m    = errors.size();
+    const double        sum  = std::accumulate(errors.begin(), errors.end(), 0.0);
+    const double        mean = sum / static_cast<double>(m);
+    std::vector<double> tmp  = errors;
+    std::sort(tmp.begin(), tmp.end());
+    const double median = (m % 2 == 1) ? tmp[m / 2] : 0.5 * (tmp[m / 2 - 1] + tmp[m / 2]);
+    const double sq_sum =
+            std::accumulate(errors.begin(), errors.end(), 0.0, [&](double a, double b) {
+                return a + (b - mean) * (b - mean);
+            });
+    const double stddev = (m > 0) ? std::sqrt(sq_sum / static_cast<double>(m)) : 0.0;
+    const double rms    = std::sqrt(std::accumulate(errors.begin(),
+                                                 errors.end(),
+                                                 0.0,
+                                                 [](double a, double b) { return a + b * b; }) /
+                                 static_cast<double>(m));
+
+    const auto it_min = std::min_element(errors.begin(), errors.end());
+    const auto it_max = std::max_element(errors.begin(), errors.end());
+
+    stats.mean    = mean;
+    stats.median  = median;
+    stats.std     = stddev;
+    stats.rms     = rms;
+    stats.sum     = sum;
+    stats.min     = (it_min != errors.end()) ? *it_min : 0.0;
+    stats.max     = (it_max != errors.end()) ? *it_max : 0.0;
+    stats.idx_min = (it_min != errors.end())
+                            ? static_cast<size_t>(std::distance(errors.begin(), it_min))
+                            : 0;
+    stats.idx_max = (it_max != errors.end())
+                            ? static_cast<size_t>(std::distance(errors.begin(), it_max))
+                            : 0;
+    return stats;
+}
+
+void Wave::print_error_summary() const {
+    pcout << "===============================================" << std::endl;
+    pcout << "Error summary over time:" << std::endl;
+    pcout << "-----------------------------------------------" << std::endl;
+
+    // If no errors were recorded, exit early
+    if (time_history.empty()) {
+        pcout << "No error history recorded (time_history is empty)." << std::endl;
+        return;
+    }
+
+    // Number of time steps recorded
+    const size_t n = error_u_history.size();
+
+    // u stats
+    const ErrorStatistics u_stats       = compute_error_statistics(error_u_history);
+    const double          u_mean        = u_stats.mean;
+    const double          u_median      = u_stats.median;
+    const double          u_stddev      = u_stats.std;
+    const double          u_rms         = u_stats.rms;
+    const double          u_min         = u_stats.min;
+    const double          u_max         = u_stats.max;
+    const size_t          u_idx_min     = u_stats.idx_min;
+    const size_t          u_idx_max     = u_stats.idx_max;
+    const double          u_time_of_max = time_history[u_idx_max];
+    const double          u_time_of_min = time_history[u_idx_min];
+    const double          u_final       = error_u_history.back();
+
+    // v stats
+    const ErrorStatistics v_stats       = compute_error_statistics(error_v_history);
+    const double          v_mean        = v_stats.mean;
+    const double          v_median      = v_stats.median;
+    const double          v_stddev      = v_stats.std;
+    const double          v_rms         = v_stats.rms;
+    const double          v_min         = v_stats.min;
+    const double          v_max         = v_stats.max;
+    const size_t          v_idx_min     = v_stats.idx_min;
+    const size_t          v_idx_max     = v_stats.idx_max;
+    const double          v_time_of_max = time_history[v_idx_max];
+    const double          v_time_of_min = time_history[v_idx_min];
+    const double          v_final       = error_v_history.back();
+
+    // max relative change between consecutive steps (for u and v)
+    double u_max_rel_change = 0.0;
+    double v_max_rel_change = 0.0;
+    for (size_t i = 1; i < n; ++i) {
+        const double du    = std::abs(error_u_history[i] - error_u_history[i - 1]);
+        const double dv    = std::abs(error_v_history[i] - error_v_history[i - 1]);
+        const double u_rel = (error_u_history[i - 1] != 0.0) ? du / error_u_history[i - 1] : du;
+        const double v_rel = (error_v_history[i - 1] != 0.0) ? dv / error_v_history[i - 1] : dv;
+        u_max_rel_change   = std::max(u_max_rel_change, u_rel);
+        v_max_rel_change   = std::max(v_max_rel_change, v_rel);
+    }
+
+    pcout << "-----------------------------------------------" << std::endl;
+    pcout << "Error summary (L2 norms) over time-steps (n=" << n << "):" << std::endl;
+    pcout << std::fixed;
+    pcout << " u: min                  = " << std::scientific << std::setprecision(5) << u_min
+          << "\n"
+          << "    max                  = " << std::scientific << std::setprecision(5) << u_max
+          << "\n"
+          << "    mean                 = " << std::scientific << std::setprecision(5) << u_mean
+          << "\n"
+          << "    median               = " << std::scientific << std::setprecision(5) << u_median
+          << "\n"
+          << "    stddev               = " << std::scientific << std::setprecision(5) << u_stddev
+          << "\n"
+          << "    rms                  = " << std::scientific << std::setprecision(5) << u_rms
+          << "\n"
+          << "    final                = " << std::scientific << std::setprecision(5) << u_final
+          << "\n"
+          << "    time_of_max          = " << std::fixed << std::setprecision(5) << u_time_of_max
+          << "\n"
+          << "    time_of_min          = " << std::fixed << std::setprecision(5) << u_time_of_min
+          << "\n"
+          << "    max_rel_step_change = " << std::scientific << std::setprecision(5)
+          << u_max_rel_change << std::endl;
+
+    pcout << std::endl;
+
+    pcout << " v: min                 = " << std::scientific << std::setprecision(5) << v_min
+          << "\n"
+          << "    max                 = " << std::scientific << std::setprecision(5) << v_max
+          << "\n"
+          << "    mean                = " << std::scientific << std::setprecision(5) << v_mean
+          << "\n"
+          << "    median              = " << std::scientific << std::setprecision(5) << v_median
+          << "\n"
+          << "    stddev              = " << std::scientific << std::setprecision(5) << v_stddev
+          << "\n"
+          << "    rms                 = " << std::scientific << std::setprecision(5) << v_rms
+          << "\n"
+          << "    final               = " << std::scientific << std::setprecision(5) << v_final
+          << "\n"
+          << "    time_of_max         = " << std::fixed << std::setprecision(5) << v_time_of_max
+          << "\n"
+          << "    time_of_min         = " << std::fixed << std::setprecision(5) << v_time_of_min
+          << "\n"
+          << "    max_rel_step_change = " << std::scientific << std::setprecision(5)
+          << v_max_rel_change << std::endl;
+    pcout << "-----------------------------------------------" << std::endl;
+
+    // Ask user whether to save the history to a CSV file
+    const std::string default_fname = "./error_history.csv";
+    std::cout << "Save error history to CSV file '" << default_fname << "'? [y/N]: " << std::flush;
+    std::string answer;
+    std::getline(std::cin, answer);
+    if (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y')) {
+        if (std::ofstream ofs(default_fname); ofs) {
+            ofs << "time,error_u,error_v\n";
+            for (size_t i = 0; i < n; ++i)
+                ofs << std::fixed << std::setprecision(10) << time_history[i] << ","
+                    << std::scientific << std::setprecision(10) << error_u_history[i] << ","
+                    << std::scientific << std::setprecision(10) << error_v_history[i] << "\n";
+            ofs.close();
+            pcout << "Wrote error history to '" << default_fname << "'" << std::endl;
+        } else {
+            pcout << "Failed to open '" << default_fname << "' for writing." << std::endl;
+        }
+    } else {
+        pcout << "Did not save error history." << std::endl;
+    }
+
+    pcout << "===============================================" << std::endl;
+}
+
 
 void Wave::solve() {
     assemble_matrices();
@@ -410,7 +583,8 @@ void Wave::solve() {
                 std::map<types::global_dof_index, double> v_boundary_values;
                 boundary_v->set_time(t_np1);
                 for (const auto id: boundary_ids)
-                    VectorTools::interpolate_boundary_values(dof_handler, id, *boundary_v, v_boundary_values);
+                    VectorTools::interpolate_boundary_values(
+                            dof_handler, id, *boundary_v, v_boundary_values);
 
                 // 4. Advance the solution to time step n+1
                 time_integrator->advance(t_n,
@@ -435,15 +609,15 @@ void Wave::solve() {
                 solution.update_ghost_values();
                 velocity.update_ghost_values();
 
-                // 6. Compute errors if exact solution is available
+                // 6. Compute errors if exact solution is available: store them for later summary
                 if (parameters.problem.type == ProblemType::MMS) {
                     const auto [error_u, error_v] = compute_errors(t_np1);
-                    pcout << "    L2 error at t=" << std::fixed << std::setprecision(5) << t_np1
-                          << ": "
-                          << "||u - u_exact||_L2 = " << std::scientific << std::setprecision(5)
-                          << error_u << ", "
-                          << "||v - v_exact||_L2 = " << std::scientific << std::setprecision(5)
-                          << error_v << std::endl;
+                    // Only rank 0 stores the time/error history to reduce memory on worker ranks
+                    if (mpi_rank == 0) {
+                        time_history.push_back(t_np1);
+                        error_u_history.push_back(error_u);
+                        error_v_history.push_back(error_v);
+                    }
                 }
 
                 if (step % output_every == 0) {
@@ -459,4 +633,9 @@ void Wave::solve() {
                 oss << "t=" << std::fixed << std::setprecision(5) << t_show;
                 return oss.str();
             });
+
+    // After time-stepping, print an extended error summary if using MMS (only on rank 0)
+    if (parameters.problem.type == ProblemType::MMS && mpi_rank == 0) {
+        print_error_summary();
+    }
 }

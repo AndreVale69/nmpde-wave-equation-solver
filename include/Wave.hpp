@@ -28,12 +28,12 @@
 #include <deal.II/numerics/matrix_tools.h>
 #include <deal.II/numerics/vector_tools.h>
 
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <utility>
-
-#include <cstdlib>
-#include <filesystem>
+#include <vector>
 
 #include "enum/time_scheme.hpp"
 #include "mms_functions.hpp"
@@ -94,6 +94,26 @@ protected:
 
     // Compute errors with respect to the exact solution at the given time.
     std::pair<double, double> compute_errors(double time);
+
+    // Error statistics structure.
+    struct ErrorStatistics {
+        double mean;
+        double median;
+        double std;
+        double rms;
+        double sum;
+        double min;
+        double max;
+        // Indices (position in the time/error history vectors) where min/max occur
+        size_t idx_min;
+        size_t idx_max;
+    };
+
+    // Compute error statistics: min, max, mean, std, rms (root-mean-square).
+    static ErrorStatistics compute_error_statistics(const std::vector<double> &errors);
+
+    // Print a summary of the errors computed during the simulation.
+    void print_error_summary() const;
 
     // Problem parameters. ////////////////////////////////////////////////////////
 
@@ -207,6 +227,12 @@ protected:
 
     // Velocity (including ghost elements).
     TrilinosWrappers::MPI::Vector velocity;
+
+    // Error history (filled during solve when using MMS).
+    // error_u_history[k] and error_v_history[k] correspond to time_history[k].
+    std::vector<double> error_u_history;
+    std::vector<double> error_v_history;
+    std::vector<double> time_history;
 
     /**
      * Process the mesh input file. If it is a .geo file, attempt to generate
