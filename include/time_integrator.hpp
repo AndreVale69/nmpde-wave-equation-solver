@@ -16,14 +16,16 @@ public:
                             const TrilinosWrappers::MPI::Vector  &V0,
                             const double                          dt) = 0;
 
-    virtual void advance(const double                          t_n,
-                         const double                          dt,
-                         const TrilinosWrappers::SparseMatrix &M,
-                         const TrilinosWrappers::SparseMatrix &K,
-                         const TrilinosWrappers::MPI::Vector  &F_n,
-                         const TrilinosWrappers::MPI::Vector  &F_np1,
-                         TrilinosWrappers::MPI::Vector        &U,
-                         TrilinosWrappers::MPI::Vector        &V) = 0; // V^n -> V^{n+1}
+    virtual void advance(const double                                     t_n,
+                         const double                                     dt,
+                         const TrilinosWrappers::SparseMatrix            &M,
+                         const TrilinosWrappers::SparseMatrix            &K,
+                         const TrilinosWrappers::MPI::Vector             &F_n,
+                         const TrilinosWrappers::MPI::Vector             &F_np1,
+                         const AffineConstraints<>                       &constraints_v_np1,
+                         const std::map<types::global_dof_index, double> &v_boundary_values,
+                         TrilinosWrappers::MPI::Vector                   &U,
+                         TrilinosWrappers::MPI::Vector                   &V) = 0; // V^n -> V^{n+1}
 };
 
 #endif // NM4PDE_TIME_INTEGRATOR_H

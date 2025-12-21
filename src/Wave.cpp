@@ -379,6 +379,11 @@ void Wave::solve() {
         VectorTools::interpolate(dof_handler, v_0, velocity_owned);
         velocity = velocity_owned;
 
+        // Apply Dirichlet constraints to initial velocity
+        AffineConstraints<> constraints_v0;
+        make_velocity_dirichlet_constraints(0.0, constraints_v0);
+        constraints_v0.distribute(velocity_owned);
+
         // Output the initial solution (time step 0)
         output(0);
         pcout << "-----------------------------------------------" << std::endl;
@@ -397,28 +402,49 @@ void Wave::solve() {
 
                 // 2. Create Dirichlet constraints at time step n+1
                 AffineConstraints<> constraints_u_np1;
+                AffineConstraints<> constraints_v_np1;
                 make_dirichlet_constraints(t_np1, constraints_u_np1);
+                make_velocity_dirichlet_constraints(t_np1, constraints_v_np1);
 
-                // 3. Advance the solution to time step n+1
+                // 3. Build Dirichlet values map for velocity at time step n+1
+                std::map<types::global_dof_index, double> v_boundary_values;
+                boundary_v->set_time(t_np1);
+                for (const auto id: boundary_ids)
+                    VectorTools::interpolate_boundary_values(dof_handler, id, *boundary_v, v_boundary_values);
+
+                // 4. Advance the solution to time step n+1
                 time_integrator->advance(t_n,
                                          deltat,
                                          mass_matrix,
                                          stiffness_matrix,
                                          forcing_n,
                                          forcing_np1,
+                                         constraints_v_np1,
+                                         v_boundary_values,
                                          solution_owned,
                                          velocity_owned);
 
-                // 4. Apply Dirichlet constraints to the new solution
+                // 5. Apply Dirichlet constraints to the solution and velocity at time step n+1
                 constraints_u_np1.distribute(solution_owned);
+                constraints_v_np1.distribute(velocity_owned);
 
 
-                // 5. Update ghosted vectors for output
+                // 6. Update the solution and velocity vectors with ghost values
                 solution = solution_owned;
-                solution.update_ghost_values();
-
                 velocity = velocity_owned;
+                solution.update_ghost_values();
                 velocity.update_ghost_values();
+
+                // 6. Compute errors if exact solution is available
+                if (parameters.problem.type == ProblemType::MMS) {
+                    const auto [error_u, error_v] = compute_errors(t_np1);
+                    pcout << "    L2 error at t=" << std::fixed << std::setprecision(5) << t_np1
+                          << ": "
+                          << "||u - u_exact||_L2 = " << std::scientific << std::setprecision(5)
+                          << error_u << ", "
+                          << "||v - v_exact||_L2 = " << std::scientific << std::setprecision(5)
+                          << error_v << std::endl;
+                }
 
                 if (step % output_every == 0) {
                     output(step);
