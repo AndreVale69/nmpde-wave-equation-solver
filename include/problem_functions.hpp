@@ -17,4 +17,16 @@ public:
     double value(const Point<dim> &, const unsigned int = 0) const override { return 0.0; }
 };
 
+/**
+ * @brief Homogeneous Dirichlet boundary condition for the velocity v = 0.
+ * @tparam dim Spatial dimension.
+ */
+template<int dim>
+class BoundaryVZero : public Function<dim> {
+public:
+    BoundaryVZero() : Function<dim>(1) {}
+
+    double value(const Point<dim> &, const unsigned int = 0) const override { return 0.0; }
+};
+
 #endif // NM4PDE_PROBLEM_FUNCTIONS_HPP
