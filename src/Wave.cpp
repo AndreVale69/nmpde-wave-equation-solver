@@ -450,46 +450,46 @@ void Wave::print_error_summary() const {
     pcout << "Error summary (L2 norms) over time-steps (n=" << n << "):" << std::endl;
     pcout << std::fixed;
     pcout << " u: min                  = " << std::scientific << std::setprecision(5) << u_min
-          << "\n"
+          << std::endl
           << "    max                  = " << std::scientific << std::setprecision(5) << u_max
-          << "\n"
+          << std::endl
           << "    mean                 = " << std::scientific << std::setprecision(5) << u_mean
-          << "\n"
+          << std::endl
           << "    median               = " << std::scientific << std::setprecision(5) << u_median
-          << "\n"
+          << std::endl
           << "    stddev               = " << std::scientific << std::setprecision(5) << u_stddev
-          << "\n"
+          << std::endl
           << "    rms                  = " << std::scientific << std::setprecision(5) << u_rms
-          << "\n"
+          << std::endl
           << "    final                = " << std::scientific << std::setprecision(5) << u_final
-          << "\n"
+          << std::endl
           << "    time_of_max          = " << std::fixed << std::setprecision(5) << u_time_of_max
-          << "\n"
+          << std::endl
           << "    time_of_min          = " << std::fixed << std::setprecision(5) << u_time_of_min
-          << "\n"
+          << std::endl
           << "    max_rel_step_change = " << std::scientific << std::setprecision(5)
           << u_max_rel_change << std::endl;
 
     pcout << std::endl;
 
     pcout << " v: min                 = " << std::scientific << std::setprecision(5) << v_min
-          << "\n"
+          << std::endl
           << "    max                 = " << std::scientific << std::setprecision(5) << v_max
-          << "\n"
+          << std::endl
           << "    mean                = " << std::scientific << std::setprecision(5) << v_mean
-          << "\n"
+          << std::endl
           << "    median              = " << std::scientific << std::setprecision(5) << v_median
-          << "\n"
+          << std::endl
           << "    stddev              = " << std::scientific << std::setprecision(5) << v_stddev
-          << "\n"
+          << std::endl
           << "    rms                 = " << std::scientific << std::setprecision(5) << v_rms
-          << "\n"
+          << std::endl
           << "    final               = " << std::scientific << std::setprecision(5) << v_final
-          << "\n"
+          << std::endl
           << "    time_of_max         = " << std::fixed << std::setprecision(5) << v_time_of_max
-          << "\n"
+          << std::endl
           << "    time_of_min         = " << std::fixed << std::setprecision(5) << v_time_of_min
-          << "\n"
+          << std::endl
           << "    max_rel_step_change = " << std::scientific << std::setprecision(5)
           << v_max_rel_change << std::endl;
     pcout << "-----------------------------------------------" << std::endl;
@@ -501,13 +501,59 @@ void Wave::print_error_summary() const {
     std::getline(std::cin, answer);
     if (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y')) {
         if (std::ofstream ofs(default_fname); ofs) {
-            ofs << "time,error_u,error_v\n";
-            for (size_t i = 0; i < n; ++i)
-                ofs << std::fixed << std::setprecision(10) << time_history[i] << ","
-                    << std::scientific << std::setprecision(10) << error_u_history[i] << ","
-                    << std::scientific << std::setprecision(10) << error_v_history[i] << "\n";
+            // Write CSV header
+            ofs << "step,time,error_u,error_v,delta_u,delta_v,rel_delta_u,rel_delta_v,cum_mean_u,"
+                   "cum_mean_v,cum_rms_u,cum_rms_v\n";
+
+            // Write data rows
+            double prev_u = 0.0, prev_v = 0.0;
+            double cum_sum_u = 0.0, cum_sum_v = 0.0;
+            double cum_sq_u = 0.0, cum_sq_v = 0.0;
+
+            // Loop over all time steps
+            for (size_t i = 0; i < n; ++i) {
+                // Current time and errors
+                const double t  = time_history[i];
+                const double eu = error_u_history[i];
+                const double ev = error_v_history[i];
+
+                // Changes from previous step
+                const double delta_u     = (i > 0) ? (eu - prev_u) : 0.0;
+                const double delta_v     = (i > 0) ? (ev - prev_v) : 0.0;
+                const double rel_delta_u = (i > 0 && prev_u != 0.0) ? (delta_u / prev_u) : 0.0;
+                const double rel_delta_v = (i > 0 && prev_v != 0.0) ? (delta_v / prev_v) : 0.0;
+
+                // Cumulative statistics
+                cum_sum_u += eu;
+                cum_sum_v += ev;
+                cum_sq_u += eu * eu;
+                cum_sq_v += ev * ev;
+
+                // Cumulative mean and RMS
+                const double cum_mean_u = cum_sum_u / static_cast<double>(i + 1);
+                const double cum_mean_v = cum_sum_v / static_cast<double>(i + 1);
+                const double cum_rms_u  = std::sqrt(cum_sq_u / static_cast<double>(i + 1));
+                const double cum_rms_v  = std::sqrt(cum_sq_v / static_cast<double>(i + 1));
+
+                // Write row: step (1-based), time, errors and diagnostics
+                ofs << (i + 1) << "," << std::fixed << std::setprecision(10) << t << ","
+                    << std::scientific << std::setprecision(10) << eu << "," << std::scientific
+                    << std::setprecision(10) << ev << "," << std::scientific
+                    << std::setprecision(10) << delta_u << "," << std::scientific
+                    << std::setprecision(10) << delta_v << "," << std::scientific
+                    << std::setprecision(10) << rel_delta_u << "," << std::scientific
+                    << std::setprecision(10) << rel_delta_v << "," << std::scientific
+                    << std::setprecision(10) << cum_mean_u << "," << std::scientific
+                    << std::setprecision(10) << cum_mean_v << "," << std::scientific
+                    << std::setprecision(10) << cum_rms_u << "," << std::scientific
+                    << std::setprecision(10) << cum_rms_v << std::endl;
+
+                prev_u = eu;
+                prev_v = ev;
+            }
+
             ofs.close();
-            pcout << "Wrote error history to '" << default_fname << "'" << std::endl;
+            pcout << "Wrote extended error history to '" << default_fname << "'" << std::endl;
         } else {
             pcout << "Failed to open '" << default_fname << "' for writing." << std::endl;
         }
