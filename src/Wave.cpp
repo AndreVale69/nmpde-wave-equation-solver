@@ -269,6 +269,20 @@ void Wave::make_dirichlet_constraints(const double &time, AffineConstraints<> &c
     constraints.close();
 }
 
+void Wave::make_velocity_dirichlet_constraints(const double               time,
+                                               AffineConstraints<double> &constraints) const {
+    constraints.clear();
+    constraints.reinit(locally_relevant_dofs);
+    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+
+    boundary_v->set_time(time);
+    for (const auto id: boundary_ids)
+        VectorTools::interpolate_boundary_values(dof_handler, id, *boundary_v, constraints);
+
+    constraints.close();
+}
+
+
 void Wave::output(const unsigned int &time_step) const {
     DataOut<dim> data_out;
     data_out.add_data_vector(dof_handler, solution, "u");

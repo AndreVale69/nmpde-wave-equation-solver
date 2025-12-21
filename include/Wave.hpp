@@ -86,6 +86,9 @@ protected:
     // Apply Dirichlet boundary conditions.
     void make_dirichlet_constraints(const double &time, AffineConstraints<> &constraints) const;
 
+    // Apply Dirichlet boundary conditions to the velocity.
+    void make_velocity_dirichlet_constraints(double time, AffineConstraints<> &constraints) const;
+
     // Output.
     void output(const unsigned int &time_step) const;
 
@@ -112,6 +115,9 @@ protected:
 
     // Boundary condition g.
     std::unique_ptr<Function<dim>> boundary_g;
+
+    // Boundary condition for the velocity.
+    std::unique_ptr<Function<dim>> boundary_v;
 
     // Boundary IDs where Dirichlet BCs are applied.
     std::set<types::boundary_id> boundary_ids;
