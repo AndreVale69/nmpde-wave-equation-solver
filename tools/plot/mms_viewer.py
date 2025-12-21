@@ -20,6 +20,9 @@ df = pd.read_csv(uploaded)
 st.subheader("Preview")
 st.dataframe(df.head(20), width='stretch')
 
+if st.checkbox("Show full dataframe"):
+    st.dataframe(df, width='stretch')
+
 required_cols = {"time"}
 if not required_cols.issubset(df.columns):
     st.error("CSV must contain a `time` column.")
@@ -127,12 +130,12 @@ if show_delta:
     ax = fig.add_subplot(111)
 
     if "delta_u" in df.columns:
-        ax.plot(t, df["delta_u"], label="delta_u")
+        ax.plot(t, df["delta_u"], label="$\Delta_u$")
     else:
         st.warning("Missing column: delta_u")
 
     if "delta_v" in df.columns:
-        ax.plot(t, df["delta_v"], label="delta_v")
+        ax.plot(t, df["delta_v"], label="$\Delta_v$")
     else:
         st.warning("Missing column: delta_v")
 
