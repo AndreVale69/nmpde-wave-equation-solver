@@ -2,6 +2,7 @@
 
 #include "theta_integrator.hpp"
 #include "time_integrator.hpp"
+#include <deal.II/base/function.h>
 
 void Wave::process_mesh_input() {
     try {
@@ -269,6 +270,19 @@ void Wave::solve() {
         pcout << "-----------------------------------------------" << std::endl;
     }
 
+    // Build boundary values for homogenous Dirchlet
+    // g=0 => u=0 and v = 0 on  boundary
+    std::map<types::global_dof_index, double> boundary_values_zero;
+    {
+        Functions::ZeroFunction<dim> zero;
+
+        std::map<types::boundary_id, const Function<dim> *> boundary_functions;
+        for (unsigned int bid = 0; bid < 6; ++bid)
+            boundary_functions[bid] = &zero;
+        VectorTools::interpolate_boundary_values(
+                dof_handler, boundary_functions, boundary_values_zero);
+    }
+
     unsigned int time_step = 0;
     double       time      = 0;
 
@@ -289,8 +303,16 @@ void Wave::solve() {
                                  stiffness_matrix,
                                  forcing_n,
                                  forcing_np1,
+                                 boundary_values_zero,
                                  solution_owned,
                                  velocity_owned);
+
+        // Enforce u=0 on boundary after the explicit update (important for wave)
+        for (const auto &it : boundary_values_zero)
+            if (solution_owned.locally_owned_elements().is_element(it.first))
+                solution_owned[it.first] = it.second;
+
+        solution_owned.compress(VectorOperation::insert);
 
         // 3. Update ghosted vectors for output
         solution = solution_owned;

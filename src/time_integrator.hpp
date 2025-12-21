@@ -3,6 +3,8 @@
 
 #include <deal.II/lac/trilinos_sparse_matrix.h>
 #include <deal.II/lac/trilinos_vector.h>
+#include <map>
+#include <deal.II/base/types.h>
 
 using namespace dealii;
 
@@ -22,6 +24,7 @@ public:
                          const TrilinosWrappers::SparseMatrix &K,
                          const TrilinosWrappers::MPI::Vector  &F_n,
                          const TrilinosWrappers::MPI::Vector  &F_np1,
+                         const std::map<types::global_dof_index, double> &boundary_values_v,
                          TrilinosWrappers::MPI::Vector        &U,
                          TrilinosWrappers::MPI::Vector        &V) = 0; // V^n -> V^{n+1}
 };

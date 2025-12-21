@@ -66,13 +66,16 @@ public:
         }
     };
 
-    // Function for the initial condition.
+    // Function for the initial condition (single eigenmode, compatible with u=0 on boundary).
     class FunctionU0 : public Function<dim> {
     public:
         double value(const Point<dim> &p, const unsigned int /*component*/ = 0) const override {
-            return p[0] * (1.0 - p[0]) * p[1] * (1.0 - p[1]);
+            const double pi = numbers::PI;
+            // 1st mode in 2D square-like domain: sin(pi x) sin(pi y)
+            return std::sin(pi * p[0]) * std::sin(pi * p[1]);
         }
     };
+
 
     // Function for the initial velocity.
     class FunctionV0 : public Function<dim> {

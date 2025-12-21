@@ -19,11 +19,14 @@ public:
                  const TrilinosWrappers::SparseMatrix &K,
                  const TrilinosWrappers::MPI::Vector  &F_n,
                  const TrilinosWrappers::MPI::Vector  &F_np1,
+                 const std::map<types::global_dof_index, double> &boundary_values_v,
                  TrilinosWrappers::MPI::Vector        &U,
                  TrilinosWrappers::MPI::Vector        &V) override;
 
 private:
     double theta;
+
+    TrilinosWrappers::SparseMatrix lhs_matrix_base;
     // Matrix on the left-hand side (M / deltat + theta A).
     TrilinosWrappers::SparseMatrix lhs_matrix;
 
