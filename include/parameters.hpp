@@ -51,10 +51,16 @@ struct Parameters {
          * @brief Type of boundary condition to apply.
          */
         BoundaryType type = BoundaryType::Zero;
+
         /**
-         * @brief Expression for the boundary condition (if type is Expr).
+         * @brief Dirichlet for displacement: g = h(x,y,t)
          */
-        std::string expr = "0";
+        std::string g_expr = "0";
+
+        /**
+         * @brief Dirichlet for velocity: v = h(x,y,t)
+         */
+        std::string v_expr = "0";
     } boundary_condition;
 
     /**
@@ -125,6 +131,7 @@ struct Parameters {
      * @tparam dim Spatial dimension.
      * @param mu FunctionParser for the mu coefficient.
      * @param boundary_g FunctionParser for the boundary condition g.
+     * @param boundary_v FunctionParser for the boundary condition for the velocity.
      * @param forcing_term FunctionParser for the forcing term.
      * @param u_0 FunctionParser for the initial displacement.
      * @param v_0 FunctionParser for the initial velocity.
@@ -132,6 +139,7 @@ struct Parameters {
     template<int dim>
     void initialize_problem(FunctionParser<dim>            &mu,
                             std::unique_ptr<Function<dim>> &boundary_g,
+                            std::unique_ptr<Function<dim>> &boundary_v,
                             FunctionParser<dim>            &forcing_term,
                             FunctionParser<dim>            &u_0,
                             FunctionParser<dim>            &v_0) {
@@ -168,8 +176,22 @@ struct Parameters {
                 boundary_g = std::make_unique<ManufacturedSolution<dim>>(problem.mms_omega);
             } else {
                 auto fp = std::make_unique<FunctionParser<dim>>();
-                fp->initialize(vars, boundary_condition.expr, constants, true);
+                fp->initialize(vars, boundary_condition.g_expr, constants, true);
                 boundary_g = std::move(fp);
+            }
+        }
+
+        // Boundary condition for the velocity
+        {
+            pcout << "    Initializing the boundary condition for the velocity" << std::endl;
+            if (boundary_condition.type == BoundaryType::Zero) {
+                boundary_v = std::make_unique<BoundaryVZero<dim>>();
+            } else if (boundary_condition.type == BoundaryType::MMS) {
+                boundary_v = std::make_unique<ManufacturedVelocity<dim>>(problem.mms_omega);
+            } else {
+                auto fp = std::make_unique<FunctionParser<dim>>();
+                fp->initialize(vars, boundary_condition.v_expr, constants, true);
+                boundary_v = std::move(fp);
             }
         }
 
@@ -282,8 +304,21 @@ private:
 
         prm.enter_subsection("Boundary condition");
         {
-            prm.declare_entry("type", "zero", Patterns::Selection(kBoundaryConditionType));
-            prm.declare_entry("expr", "0", Patterns::Anything());
+            prm.declare_entry(
+                    "type",
+                    to_string(BoundaryType::Zero),
+                    Patterns::Selection(kBoundaryConditionType),
+                    "Type of boundary condition to apply: 'zero' for homogeneous Dirichlet, "
+                    "'mms' for manufactured solution, 'expr' for expression-based boundary "
+                    "condition.");
+            prm.declare_entry("g_expr",
+                              "0",
+                              Patterns::Anything(),
+                              "Dirichlet boundary for displacement u=g(x,y,t) (if type is expr).");
+            prm.declare_entry("v_expr",
+                              "0",
+                              Patterns::Anything(),
+                              "Dirichlet boundary for velocity v=h(x,y,t) (if type is expr).");
         }
         prm.leave_subsection();
 
@@ -362,7 +397,8 @@ private:
             else
                 boundary_condition.type = BoundaryType::Expr;
 
-            boundary_condition.expr = prm.get("expr");
+            boundary_condition.g_expr = prm.get("g_expr");
+            boundary_condition.v_expr = prm.get("v_expr");
         }
         prm.leave_subsection();
 

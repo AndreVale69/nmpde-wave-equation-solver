@@ -56,7 +56,7 @@ void Wave::setup() {
     // Set up the problem.
     {
         pcout << "Setting up the problem" << std::endl;
-        parameters.initialize_problem<dim>(mu, boundary_g, forcing_term, u_0, v_0);
+        parameters.initialize_problem<dim>(mu, boundary_g, boundary_v, forcing_term, u_0, v_0);
     }
 
     // Create the mesh.
