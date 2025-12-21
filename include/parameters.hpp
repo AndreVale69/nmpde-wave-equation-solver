@@ -38,10 +38,6 @@ struct Parameters {
          */
         std::string f_expr = "0";
         /**
-         * @brief Boundary condition expression (for expression-based problems).
-         */
-        std::string boundary_g_expr = "0";
-        /**
          * @brief Additional term expression (for expression-based problems).
          */
         std::string mu_expr = "1";
@@ -277,10 +273,6 @@ private:
                               "0",
                               Patterns::Anything(),
                               "Forcing term expression (for expression-based problems).");
-            prm.declare_entry("boundary_g_expr",
-                              "0",
-                              Patterns::Anything(),
-                              "Boundary condition expression (for expression-based problems).");
             prm.declare_entry("mu_expr",
                               "1",
                               Patterns::Anything(),
@@ -355,7 +347,6 @@ private:
             problem.u0_expr         = prm.get("u0_expr");
             problem.v0_expr         = prm.get("v0_expr");
             problem.f_expr          = prm.get("f_expr");
-            problem.boundary_g_expr = prm.get("boundary_g_expr");
             problem.mu_expr         = prm.get("mu_expr");
         }
         prm.leave_subsection();
