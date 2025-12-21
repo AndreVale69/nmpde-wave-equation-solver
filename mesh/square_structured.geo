@@ -1,7 +1,7 @@
 SetFactory("OpenCASCADE");
 
 L = 1.0;
-Nx = 100;  // increase to 100 for even finer
+Nx = 50;  // increase to 100 for even finer
 
 Point(1) = {0, 0, 0, 1.0};
 Point(2) = {L, 0, 0, 1.0};
