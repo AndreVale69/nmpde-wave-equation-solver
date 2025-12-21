@@ -143,12 +143,6 @@ protected:
     // Final time.
     const double T;
 
-    // Manufactured solutions (MMS). /////////////////////////////////////////////
-
-    ManufacturedSolution<dim> u_exact;
-    ManufacturedVelocity<dim> v_exact;
-    ManufacturedForcing<dim>  f_mms;
-
     // Discretization. ///////////////////////////////////////////////////////////
 
     /**
