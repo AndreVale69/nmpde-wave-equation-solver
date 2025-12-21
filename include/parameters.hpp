@@ -308,11 +308,12 @@ private:
                               "1.0",
                               Patterns::Double(0.0, 1.0),
                               "Theta parameter for the theta time integration scheme.");
-            prm.declare_entry(
-                    "scheme",
-                    "theta",
-                    Patterns::Selection(kSelectionTimeScheme),
-                    "Time integration scheme to use: 'theta', 'central_difference', or 'newmark'.");
+            prm.declare_entry("scheme",
+                              to_string(TimeScheme::Theta),
+                              Patterns::Selection(kSelectionTimeScheme),
+                              "Time integration scheme to use: '" + to_string(TimeScheme::Theta) +
+                                      "', '" + to_string(TimeScheme::CentralDifference) +
+                                      "', or '" + to_string(TimeScheme::Newmark) + "'.");
         }
         prm.leave_subsection();
 
@@ -344,10 +345,10 @@ private:
 
             problem.mms_omega = prm.get_double("mms_omega");
 
-            problem.u0_expr         = prm.get("u0_expr");
-            problem.v0_expr         = prm.get("v0_expr");
-            problem.f_expr          = prm.get("f_expr");
-            problem.mu_expr         = prm.get("mu_expr");
+            problem.u0_expr = prm.get("u0_expr");
+            problem.v0_expr = prm.get("v0_expr");
+            problem.f_expr  = prm.get("f_expr");
+            problem.mu_expr = prm.get("mu_expr");
         }
         prm.leave_subsection();
 
