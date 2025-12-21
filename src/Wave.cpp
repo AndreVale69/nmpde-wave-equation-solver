@@ -298,6 +298,54 @@ void Wave::output(const unsigned int &time_step) const {
     data_out.write_vtu_with_pvtu_record("./", "output", time_step, MPI_COMM_WORLD, 3);
 }
 
+std::pair<double, double> Wave::compute_errors(const double time) {
+    const auto exact_u = &u_0;
+    const auto exact_v = &v_0;
+    exact_u->set_time(time);
+    exact_v->set_time(time);
+
+    const unsigned int n_q = quadrature->size();
+
+    FEValues<dim> fe_values(
+            *fe, *quadrature, update_values | update_quadrature_points | update_JxW_values);
+
+    std::vector<double> uh_values(n_q);
+    std::vector<double> vh_values(n_q);
+
+    double local_u_sq = 0.0;
+    double local_v_sq = 0.0;
+
+    for (const auto &cell: dof_handler.active_cell_iterators()) {
+        if (!cell->is_locally_owned())
+            continue;
+
+        fe_values.reinit(cell);
+
+        fe_values.get_function_values(solution, uh_values);
+        fe_values.get_function_values(velocity, vh_values);
+
+        for (unsigned int q = 0; q < n_q; ++q) {
+            const Point<dim> &xq = fe_values.quadrature_point(q);
+
+            const double uex = exact_u->value(xq);
+            const double vex = exact_v->value(xq);
+
+            const double eu = uh_values[q] - uex;
+            const double ev = vh_values[q] - vex;
+
+            local_u_sq += eu * eu * fe_values.JxW(q);
+            local_v_sq += ev * ev * fe_values.JxW(q);
+        }
+    }
+
+    // MPI reduction across ranks
+    const double global_u_sq = Utilities::MPI::sum(local_u_sq, MPI_COMM_WORLD);
+    const double global_v_sq = Utilities::MPI::sum(local_v_sq, MPI_COMM_WORLD);
+
+    return {std::sqrt(global_u_sq), std::sqrt(global_v_sq)};
+}
+
+
 void Wave::solve() {
     assemble_matrices();
 

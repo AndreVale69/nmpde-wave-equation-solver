@@ -92,6 +92,9 @@ protected:
     // Output.
     void output(const unsigned int &time_step) const;
 
+    // Compute errors with respect to the exact solution at the given time.
+    std::pair<double, double> compute_errors(double time);
+
     // Problem parameters. ////////////////////////////////////////////////////////
 
     // Parameters object.
