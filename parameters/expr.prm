@@ -2,7 +2,6 @@ subsection Problem
   set type        = expr
   set u0_expr     = sin(pi*x)*sin(pi*y)
   set v0_expr     = 0
-  boundary_g_expr = 0
   set mu_expr     = 0
   set f_expr      = (2*pi*pi - 1)*sin(pi*x)*sin(pi*y)*cos(1*t)
 end
