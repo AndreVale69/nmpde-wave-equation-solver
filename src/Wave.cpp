@@ -61,7 +61,7 @@ void Wave::setup() {
     // Set up the problem.
     {
         pcout << "Setting up the problem" << std::endl;
-        parameters.initialize_problem<dim>(mu, boundary_g, boundary_v, forcing_term, u_0, v_0);
+        parameters.initialize_problem(mu, boundary_g, boundary_v, forcing_term, u_0, v_0);
     }
 
     // Create the mesh.
@@ -510,7 +510,8 @@ void Wave::print_error_summary() const {
 
                 if (std::ofstream ofs(outpath); ofs) {
                     // Write CSV header
-                    ofs << "step,time,error_u,error_v,delta_u,delta_v,rel_delta_u,rel_delta_v,cum_mean_u,"
+                    ofs << "step,time,error_u,error_v,delta_u,delta_v,rel_delta_u,rel_delta_v,cum_"
+                           "mean_u,"
                            "cum_mean_v,cum_rms_u,cum_rms_v\n";
 
                     // Write data rows
@@ -526,10 +527,12 @@ void Wave::print_error_summary() const {
                         const double ev = error_v_history[i];
 
                         // Changes from previous step
-                        const double delta_u     = (i > 0) ? (eu - prev_u) : 0.0;
-                        const double delta_v     = (i > 0) ? (ev - prev_v) : 0.0;
-                        const double rel_delta_u = (i > 0 && prev_u != 0.0) ? (delta_u / prev_u) : 0.0;
-                        const double rel_delta_v = (i > 0 && prev_v != 0.0) ? (delta_v / prev_v) : 0.0;
+                        const double delta_u = (i > 0) ? (eu - prev_u) : 0.0;
+                        const double delta_v = (i > 0) ? (ev - prev_v) : 0.0;
+                        const double rel_delta_u =
+                                (i > 0 && prev_u != 0.0) ? (delta_u / prev_u) : 0.0;
+                        const double rel_delta_v =
+                                (i > 0 && prev_v != 0.0) ? (delta_v / prev_v) : 0.0;
 
                         // Cumulative statistics
                         cum_sum_u += eu;
@@ -545,25 +548,27 @@ void Wave::print_error_summary() const {
 
                         // Write row: step (1-based), time, errors and diagnostics
                         ofs << (i + 1) << "," << std::fixed << std::setprecision(10) << t << ","
-                            << std::scientific << std::setprecision(10) << eu << "," << std::scientific
-                            << std::setprecision(10) << ev << "," << std::scientific
-                            << std::setprecision(10) << delta_u << "," << std::scientific
-                            << std::setprecision(10) << delta_v << "," << std::scientific
-                            << std::setprecision(10) << rel_delta_u << "," << std::scientific
-                            << std::setprecision(10) << rel_delta_v << "," << std::scientific
-                            << std::setprecision(10) << cum_mean_u << "," << std::scientific
-                            << std::setprecision(10) << cum_mean_v << "," << std::scientific
-                            << std::setprecision(10) << cum_rms_u << "," << std::scientific
-                            << std::setprecision(10) << cum_rms_v << std::endl;
+                            << std::scientific << std::setprecision(10) << eu << ","
+                            << std::scientific << std::setprecision(10) << ev << ","
+                            << std::scientific << std::setprecision(10) << delta_u << ","
+                            << std::scientific << std::setprecision(10) << delta_v << ","
+                            << std::scientific << std::setprecision(10) << rel_delta_u << ","
+                            << std::scientific << std::setprecision(10) << rel_delta_v << ","
+                            << std::scientific << std::setprecision(10) << cum_mean_u << ","
+                            << std::scientific << std::setprecision(10) << cum_mean_v << ","
+                            << std::scientific << std::setprecision(10) << cum_rms_u << ","
+                            << std::scientific << std::setprecision(10) << cum_rms_v << std::endl;
 
                         prev_u = eu;
                         prev_v = ev;
                     }
 
                     ofs.close();
-                    pcout << "Wrote extended error history to '" << outpath.string() << "'" << std::endl;
+                    pcout << "Wrote extended error history to '" << outpath.string() << "'"
+                          << std::endl;
                 } else {
-                    pcout << "Failed to open '" << outpath.string() << "' for writing." << std::endl;
+                    pcout << "Failed to open '" << outpath.string() << "' for writing."
+                          << std::endl;
                 }
             } catch (const std::exception &e) {
                 pcout << "Exception while trying to write error history to '" << outpath.string()

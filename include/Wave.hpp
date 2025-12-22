@@ -53,7 +53,7 @@ public:
     // Constructor. We provide the final time, time step Delta t and theta method
     // parameter as constructor arguments.
     explicit Wave(const std::string &parameters_file)
-        : parameters(Parameters(parameters_file))
+        : parameters(Parameters<dim>(parameters_file))
         , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
         , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
         , pcout(std::cout, mpi_rank == 0)
@@ -118,7 +118,7 @@ protected:
     // Problem parameters. ////////////////////////////////////////////////////////
 
     // Parameters object.
-    Parameters parameters;
+    Parameters<dim> parameters;
 
     // MPI parallel. /////////////////////////////////////////////////////////////
 

@@ -15,6 +15,7 @@
 /**
  * @brief Structure to hold simulation parameters.
  */
+template<int dim>
 struct Parameters {
     /**
      * @brief Problem-related parameters.
@@ -25,21 +26,29 @@ struct Parameters {
          */
         ProblemType type = ProblemType::Physical;
         /**
-         * @brief Angular frequency for the manufactured solution (MMS).
-         */
-        double mms_omega = 1.0;
-        /**
          * @brief Initial displacement expression (for expression-based problems).
          */
         std::string u0_expr = "x*(1-x)*y*(1-y)";
+        /**
+         * @brief Exact initial displacement expression (for MMS problems).
+         */
+        std::string u0_exact_expr = ManufacturedSolution<dim>().get_expression();
         /**
          * @brief Initial velocity expression (for expression-based problems).
          */
         std::string v0_expr = "0";
         /**
+         * @brief Exact initial velocity expression (for MMS problems).
+         */
+        std::string v0_exact_expr = ManufacturedVelocity<dim>().get_expression();
+        /**
          * @brief Forcing term expression (for expression-based problems).
          */
         std::string f_expr = "0";
+        /**
+         * @brief Exact forcing term expression (for MMS problems).
+         */
+        std::string f_exact_expr = ManufacturedForcing<dim>().get_expression();
         /**
          * @brief Additional term expression (for expression-based problems).
          */
@@ -157,7 +166,6 @@ struct Parameters {
      * @param u_0 FunctionParser for the initial displacement.
      * @param v_0 FunctionParser for the initial velocity.
      */
-    template<int dim>
     void initialize_problem(FunctionParser<dim>            &mu,
                             std::unique_ptr<Function<dim>> &boundary_g,
                             std::unique_ptr<Function<dim>> &boundary_v,
@@ -178,9 +186,7 @@ struct Parameters {
         {
             pcout << "    Initializing the forcing term" << std::endl;
             if (problem.type == ProblemType::MMS) {
-                ManufacturedForcing<dim> manufactured_forcing(problem.mms_omega);
-                forcing_term.initialize(
-                        vars, manufactured_forcing.get_expression(), constants, true);
+                forcing_term.initialize(vars, problem.f_exact_expr, constants, true);
             } else if (problem.type == ProblemType::Expr) {
                 forcing_term.initialize(vars, problem.f_expr, constants, true);
             } else {
@@ -194,7 +200,9 @@ struct Parameters {
             if (boundary_condition.type == BoundaryType::Zero) {
                 boundary_g = std::make_unique<BoundaryGZero<dim>>();
             } else if (boundary_condition.type == BoundaryType::MMS) {
-                boundary_g = std::make_unique<ManufacturedSolution<dim>>(problem.mms_omega);
+                auto fp = std::make_unique<FunctionParser<dim>>();
+                fp->initialize(vars, problem.u0_exact_expr, constants, true);
+                boundary_g = std::move(fp);
             } else {
                 auto fp = std::make_unique<FunctionParser<dim>>();
                 fp->initialize(vars, boundary_condition.g_expr, constants, true);
@@ -208,7 +216,9 @@ struct Parameters {
             if (boundary_condition.type == BoundaryType::Zero) {
                 boundary_v = std::make_unique<BoundaryVZero<dim>>();
             } else if (boundary_condition.type == BoundaryType::MMS) {
-                boundary_v = std::make_unique<ManufacturedVelocity<dim>>(problem.mms_omega);
+                auto fp = std::make_unique<FunctionParser<dim>>();
+                fp->initialize(vars, problem.v0_exact_expr, constants, true);
+                boundary_v = std::move(fp);
             } else {
                 auto fp = std::make_unique<FunctionParser<dim>>();
                 fp->initialize(vars, boundary_condition.v_expr, constants, true);
@@ -220,8 +230,7 @@ struct Parameters {
         {
             pcout << "    Initializing the initial condition" << std::endl;
             if (problem.type == ProblemType::MMS) {
-                ManufacturedSolution<dim> manufactored_solution(problem.mms_omega);
-                u_0.initialize(vars, manufactored_solution.get_expression(), constants, true);
+                u_0.initialize(vars, problem.u0_exact_expr, constants, true);
             } else if (problem.type == ProblemType::Expr) {
                 u_0.initialize(vars, problem.u0_expr, constants, true);
             } else {
@@ -233,8 +242,7 @@ struct Parameters {
         {
             pcout << "    Initializing the initial velocity" << std::endl;
             if (problem.type == ProblemType::MMS) {
-                ManufacturedVelocity<dim> manufactured_velocity(problem.mms_omega);
-                v_0.initialize(vars, manufactured_velocity.get_expression(), constants, true);
+                v_0.initialize(vars, problem.v0_exact_expr, constants, true);
             } else if (problem.type == ProblemType::Expr) {
                 v_0.initialize(vars, problem.v0_expr, constants, true);
             } else {
@@ -313,11 +321,23 @@ private:
                     "Type of problem to solve: 'physical' for physical problem, "
                     "'mms' for manufactured solution, 'expr' for expression-based problem.");
 
-            prm.declare_entry("mms_omega",
-                              "1.0",
-                              Patterns::Double(0.0),
-                              "Angular frequency for the manufactured solution (MMS).");
+            // MMS-based problem entries
+            prm.declare_entry("u0_exact_expr",
+                              ManufacturedSolution<dim>().get_expression(),
+                              Patterns::Anything(),
+                              "Exact initial displacement expression (for MMS problems). For "
+                              "example, u_0(x) = u_{ex}(x,0).");
+            prm.declare_entry("v0_exact_expr",
+                              ManufacturedVelocity<dim>().get_expression(),
+                              Patterns::Anything(),
+                              "Exact initial velocity expression (for MMS problems). For example, "
+                              "v_0(x) = du_{ex}/dt(x,0).");
+            prm.declare_entry("f_exact_expr",
+                              ManufacturedForcing<dim>().get_expression(),
+                              Patterns::Anything(),
+                              "Exact forcing term expression (for MMS problems).");
 
+            // Expression-based problem entries
             prm.declare_entry("u0_expr",
                               "x*(1-x)*y*(1-y)",
                               Patterns::Anything(),
@@ -420,16 +440,14 @@ private:
 
         prm.enter_subsection("Problem");
         {
-            const std::string type = prm.get("type");
-            if (type == "physical")
-                problem.type = ProblemType::Physical;
-            else if (type == "mms")
-                problem.type = ProblemType::MMS;
-            else
-                problem.type = ProblemType::Expr;
+            problem.type = problem_type_from_string(prm.get("type"));
 
-            problem.mms_omega = prm.get_double("mms_omega");
+            // MMS-based problem entries
+            problem.u0_exact_expr = prm.get("u0_exact_expr");
+            problem.v0_exact_expr = prm.get("v0_exact_expr");
+            problem.f_exact_expr  = prm.get("f_exact_expr");
 
+            // Expression-based problem entries
             problem.u0_expr = prm.get("u0_expr");
             problem.v0_expr = prm.get("v0_expr");
             problem.f_expr  = prm.get("f_expr");
@@ -439,14 +457,7 @@ private:
 
         prm.enter_subsection("Boundary condition");
         {
-            const std::string t = prm.get("type");
-            if (t == "zero")
-                boundary_condition.type = BoundaryType::Zero;
-            else if (t == "mms")
-                boundary_condition.type = BoundaryType::MMS;
-            else
-                boundary_condition.type = BoundaryType::Expr;
-
+            boundary_condition.type   = boundary_type_from_string(prm.get("type"));
             boundary_condition.g_expr = prm.get("g_expr");
             boundary_condition.v_expr = prm.get("v_expr");
         }
