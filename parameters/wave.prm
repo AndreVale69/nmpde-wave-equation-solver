@@ -1,3 +1,9 @@
+subsection Study
+  set enable_dissipation = true
+  set dissipation_every = 1
+  set dissipation_csv = dissipation.csv
+end
+
 subsection Mesh
   set mesh_file = ../mesh/square_structured.geo
   set degree    = 1

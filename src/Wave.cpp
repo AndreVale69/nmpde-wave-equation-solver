@@ -47,6 +47,22 @@ void Wave::process_mesh_input() {
     }
 }
 
+double Wave::compute_energy(const TrilinosWrappers::MPI::Vector &u_owned,
+                            const TrilinosWrappers::MPI::Vector &v_owned) const
+{
+    // tmp = M v
+    TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
+    mass_matrix.vmult(tmp, v_owned);
+    const double vMv = v_owned * tmp; // dot product
+
+    // tmp = K u
+    stiffness_matrix.vmult(tmp, u_owned);
+    const double uKu = u_owned * tmp;
+
+    return 0.5 * (vMv + uKu);
+}
+
+
 void Wave::setup() {
     // Create the mesh.
     {
@@ -270,6 +286,28 @@ void Wave::solve() {
         pcout << "-----------------------------------------------" << std::endl;
     }
 
+    // -------------------- Dissipation study (optional) --------------------
+    std::ofstream dissipation_out;
+    double E0 = 1.0;
+
+    if (parameters.enable_dissipation_study)
+    {
+        E0 = compute_energy(solution_owned, velocity_owned);
+
+        if (mpi_rank == 0)
+        {
+            dissipation_out.open(parameters.dissipation_csv);
+            dissipation_out << "n,t,E,E_over_E0\n";
+            dissipation_out << 0 << "," << 0.0 << "," << E0 << "," << 1.0 << "\n";
+            dissipation_out.flush();
+        }
+
+        pcout << "[Study] Dissipation enabled. E0 = " << E0
+              << ", writing to " << parameters.dissipation_csv << std::endl;
+        pcout << "-----------------------------------------------" << std::endl;
+    }
+
+
     // Build boundary values for homogenous Dirchlet
     // g=0 => u=0 and v = 0 on  boundary
     std::map<types::global_dof_index, double> boundary_values_zero;
@@ -320,6 +358,18 @@ void Wave::solve() {
 
         velocity = velocity_owned;
         velocity.update_ghost_values();
+
+        // -------------------- Dissipation study (optional) --------------------
+        if (parameters.enable_dissipation_study && (time_step % parameters.dissipation_every == 0))
+        {
+            const double E = compute_energy(solution_owned, velocity_owned);
+            if (mpi_rank == 0)
+            {
+                dissipation_out << time_step << "," << time << "," << E << "," << (E / E0) << "\n";
+                dissipation_out.flush();
+            }
+        }
+
 
         time = t_np1;
         ++time_step;

@@ -42,6 +42,16 @@ struct Parameters {
      */
     unsigned int output_every = 1;
 
+    // -------------------- Study: Dissipation --------------------
+    bool enable_dissipation_study = false;
+
+    // Write dissipation CSV every N time steps
+    unsigned int dissipation_every = 1;
+
+    // Output CSV file (written by rank 0)
+    std::string dissipation_csv = "dissipation.csv";
+
+
     /**
      * @brief Time integration scheme to use.
      */
@@ -112,6 +122,15 @@ private:
             prm.declare_entry("every", "1", dealii::Patterns::Integer(1));
         }
         prm.leave_subsection();
+
+        prm.enter_subsection("Study");
+        {
+            prm.declare_entry("enable_dissipation", "false", dealii::Patterns::Bool());
+            prm.declare_entry("dissipation_every", "1", dealii::Patterns::Integer(1));
+            prm.declare_entry("dissipation_csv", "dissipation.csv", dealii::Patterns::Anything());
+        }
+        prm.leave_subsection();
+
     }
 
     /**
@@ -143,6 +162,15 @@ private:
             output_every = prm.get_integer("every");
         }
         prm.leave_subsection();
+
+        prm.enter_subsection("Study");
+        {
+            enable_dissipation_study = prm.get_bool("enable_dissipation");
+            dissipation_every        = prm.get_integer("dissipation_every");
+            dissipation_csv          = prm.get("dissipation_csv");
+        }
+        prm.leave_subsection();
+
     }
 };
 

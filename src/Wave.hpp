@@ -114,6 +114,10 @@ public:
     void solve();
 
 protected:
+    // Compute discrete energy: 0.5*(v^T M v + u^T K u)
+    double compute_energy(const TrilinosWrappers::MPI::Vector &u_owned,
+                          const TrilinosWrappers::MPI::Vector &v_owned) const;
+
     // Assemble the mass and stiffness matrices.
     void assemble_matrices();
 
