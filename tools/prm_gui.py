@@ -19,8 +19,8 @@ from tkinter import ttk, filedialog, messagebox
 DEFAULTS = {
     "Problem": {
         "type": "physical",
-        "u0_exact_expr": "<manufactured_u0_expr>",
-        "v0_exact_expr": "<manufactured_v0_expr>",
+        "u_exact_expr": "<manufactured_u0_expr>",
+        "v_exact_expr": "<manufactured_v0_expr>",
         "f_exact_expr": "<manufactured_f_expr>",
         "u0_expr": "x*(1-x)*y*(1-y)",
         "v0_expr": "0",
@@ -61,8 +61,8 @@ CHOICES = {
 HELP = {
     # Problem
     ("Problem", "type"): "Choose problem type: 'physical' runs the physical problem; 'mms' uses the manufactured solution (useful for error checks); 'expr' lets you provide expressions for initial/forcing terms.",
-    ("Problem", "u0_exact_expr"): "Exact initial displacement expression (used for MMS). Provide a function of x,y,t matching the manufactured solution at t=0.",
-    ("Problem", "v0_exact_expr"): "Exact initial velocity expression (used for MMS). Provide du_ex/dt at t=0 if using MMS.",
+    ("Problem", "u_exact_expr"): "Exact initial displacement expression (used for MMS). Provide a function of x,y,t matching the manufactured solution at t=0.",
+    ("Problem", "v_exact_expr"): "Exact initial velocity expression (used for MMS). Provide du_ex/dt at t=0 if using MMS.",
     ("Problem", "f_exact_expr"): "Exact forcing term (used for MMS). For MMS tests this is the analytic RHS matching the manufactured solution.",
     ("Problem", "u0_expr"): "Initial displacement expression for 'expr' problems. Use variables x,y,t and math functions (e.g., 'sin(pi*x)').",
     ("Problem", "v0_expr"): "Initial velocity expression for 'expr' problems. Use x,y,t if needed.",
@@ -71,8 +71,8 @@ HELP = {
 
     # Boundary condition
     ("Boundary condition", "type"): "Boundary type: 'zero' imposes homogeneous Dirichlet; 'mms' uses manufactured boundary values; 'expr' uses the provided g_expr and v_expr expressions.",
-    ("Boundary condition", "g_expr"): "Dirichlet boundary expression for displacement u(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured solution (Problem.u0_exact_expr), so no need to set manually.",
-    ("Boundary condition", "v_expr"): "Dirichlet boundary expression for velocity v(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured velocity (Problem.v0_exact_expr), so no need to set manually.",
+    ("Boundary condition", "g_expr"): "Dirichlet boundary expression for displacement u(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured solution (Problem.u_exact_expr), so no need to set manually.",
+    ("Boundary condition", "v_expr"): "Dirichlet boundary expression for velocity v(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured velocity (Problem.v_exact_expr), so no need to set manually.",
 
     # Mesh
     ("Mesh", "mesh_file"): "Path to the mesh file (.geo or .msh). Use the picker to select an existing mesh in the 'mesh' folder.",
@@ -359,7 +359,7 @@ class PrmGUI(tk.Tk):
         except Exception:
             ptype = "physical"
 
-        exact_keys = ["u0_exact_expr", "v0_exact_expr", "f_exact_expr"]
+        exact_keys = ["u_exact_expr", "v_exact_expr", "f_exact_expr"]
         expr_keys = ["u0_expr", "v0_expr", "f_expr"]
 
         for k in exact_keys:
@@ -417,7 +417,7 @@ class PrmGUI(tk.Tk):
         # Problem type
         ptype = params.get("Problem", {}).get("type", "physical").strip().lower()
         if ptype == "mms":
-            for k in ("u0_exact_expr", "v0_exact_expr", "f_exact_expr"):
+            for k in ("u_exact_expr", "v_exact_expr", "f_exact_expr"):
                 if not params.get("Problem", {}).get(k):
                     return False, f"Missing required Problem parameter: {k} for MMS type"
         if ptype == "expr":

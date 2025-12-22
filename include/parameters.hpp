@@ -30,17 +30,17 @@ struct Parameters {
          */
         std::string u0_expr = "x*(1-x)*y*(1-y)";
         /**
-         * @brief Exact initial displacement expression (for MMS problems).
+         * @brief Exact displacement expression (for MMS problems).
          */
-        std::string u0_exact_expr = ManufacturedSolution<dim>().get_expression();
+        std::string u_exact_expr = ManufacturedSolution<dim>().get_expression();
         /**
          * @brief Initial velocity expression (for expression-based problems).
          */
         std::string v0_expr = "0";
         /**
-         * @brief Exact initial velocity expression (for MMS problems).
+         * @brief Exact velocity expression (for MMS problems).
          */
-        std::string v0_exact_expr = ManufacturedVelocity<dim>().get_expression();
+        std::string v_exact_expr = ManufacturedVelocity<dim>().get_expression();
         /**
          * @brief Forcing term expression (for expression-based problems).
          */
@@ -201,7 +201,7 @@ struct Parameters {
                 boundary_g = std::make_unique<BoundaryGZero<dim>>();
             } else if (boundary_condition.type == BoundaryType::MMS) {
                 auto fp = std::make_unique<FunctionParser<dim>>();
-                fp->initialize(vars, problem.u0_exact_expr, constants, true);
+                fp->initialize(vars, problem.u_exact_expr, constants, true);
                 boundary_g = std::move(fp);
             } else {
                 auto fp = std::make_unique<FunctionParser<dim>>();
@@ -217,7 +217,7 @@ struct Parameters {
                 boundary_v = std::make_unique<BoundaryVZero<dim>>();
             } else if (boundary_condition.type == BoundaryType::MMS) {
                 auto fp = std::make_unique<FunctionParser<dim>>();
-                fp->initialize(vars, problem.v0_exact_expr, constants, true);
+                fp->initialize(vars, problem.v_exact_expr, constants, true);
                 boundary_v = std::move(fp);
             } else {
                 auto fp = std::make_unique<FunctionParser<dim>>();
@@ -230,7 +230,7 @@ struct Parameters {
         {
             pcout << "    Initializing the initial condition" << std::endl;
             if (problem.type == ProblemType::MMS) {
-                u_0.initialize(vars, problem.u0_exact_expr, constants, true);
+                u_0.initialize(vars, problem.u_exact_expr, constants, true);
             } else if (problem.type == ProblemType::Expr) {
                 u_0.initialize(vars, problem.u0_expr, constants, true);
             } else {
@@ -242,7 +242,7 @@ struct Parameters {
         {
             pcout << "    Initializing the initial velocity" << std::endl;
             if (problem.type == ProblemType::MMS) {
-                v_0.initialize(vars, problem.v0_exact_expr, constants, true);
+                v_0.initialize(vars, problem.v_exact_expr, constants, true);
             } else if (problem.type == ProblemType::Expr) {
                 v_0.initialize(vars, problem.v0_expr, constants, true);
             } else {
@@ -322,12 +322,12 @@ private:
                     "'mms' for manufactured solution, 'expr' for expression-based problem.");
 
             // MMS-based problem entries
-            prm.declare_entry("u0_exact_expr",
+            prm.declare_entry("u_exact_expr",
                               ManufacturedSolution<dim>().get_expression(),
                               Patterns::Anything(),
                               "Exact initial displacement expression (for MMS problems). For "
                               "example, u_0(x) = u_{ex}(x,0).");
-            prm.declare_entry("v0_exact_expr",
+            prm.declare_entry("v_exact_expr",
                               ManufacturedVelocity<dim>().get_expression(),
                               Patterns::Anything(),
                               "Exact initial velocity expression (for MMS problems). For example, "
@@ -443,8 +443,8 @@ private:
             problem.type = problem_type_from_string(prm.get("type"));
 
             // MMS-based problem entries
-            problem.u0_exact_expr = prm.get("u0_exact_expr");
-            problem.v0_exact_expr = prm.get("v0_exact_expr");
+            problem.u_exact_expr = prm.get("u_exact_expr");
+            problem.v_exact_expr = prm.get("v_exact_expr");
             problem.f_exact_expr  = prm.get("f_exact_expr");
 
             // Expression-based problem entries

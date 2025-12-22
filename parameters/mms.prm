@@ -1,7 +1,7 @@
 subsection Problem
   set type = mms
-  set u0_exact_expr = sin(pi*x)*sin(pi*y)*cos(1.0*t)
-  set v0_exact_expr = -1.0*sin(pi*x)*sin(pi*y)*sin(1.0*t)
+  set u_exact_expr = sin(pi*x)*sin(pi*y)*cos(1.0*t)
+  set v_exact_expr = -1.0*sin(pi*x)*sin(pi*y)*sin(1.0*t)
   set f_exact_expr = (2*pi^2 - 1.0^2)*sin(pi*x)*sin(pi*y)*cos(1.0*t)
 end
 
