@@ -11,11 +11,10 @@ Features:
 - Save `.prm` file in the project's expected `set key = value` format
 - Preview the resulting file before saving
 """
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from pathlib import Path
 import re
-import json
+import tkinter as tk
+from pathlib import Path
+from tkinter import ttk, filedialog, messagebox
 
 DEFAULTS = {
     "Problem": {
