@@ -71,8 +71,8 @@ HELP = {
 
     # Boundary condition
     ("Boundary condition", "type"): "Boundary type: 'zero' imposes homogeneous Dirichlet; 'mms' uses manufactured boundary values; 'expr' uses the provided g_expr and v_expr expressions.",
-    ("Boundary condition", "g_expr"): "Dirichlet boundary expression for displacement u(x,y,t). Required if boundary type is 'expr'.",
-    ("Boundary condition", "v_expr"): "Dirichlet boundary expression for velocity v(x,y,t). Required if boundary type is 'expr'.",
+    ("Boundary condition", "g_expr"): "Dirichlet boundary expression for displacement u(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured solution (Problem.u0_exact_expr), so no need to set manually.",
+    ("Boundary condition", "v_expr"): "Dirichlet boundary expression for velocity v(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured velocity (Problem.v0_exact_expr), so no need to set manually.",
 
     # Mesh
     ("Mesh", "mesh_file"): "Path to the mesh file (.geo or .msh). Use the picker to select an existing mesh in the 'mesh' folder.",
