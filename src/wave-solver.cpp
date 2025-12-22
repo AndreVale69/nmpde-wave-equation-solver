@@ -8,22 +8,19 @@
 int
 main(int argc, char *argv[])
 {
-  Utilities::MPI::MPI_InitFinalize mpi_init(argc, argv);
-
-  const unsigned int mpi_rank = Utilities::MPI::this_mpi_process(MPI_COMM_WORLD);
 
   try
     {
       // Problem parameters
-      const std::string  mesh_file_name = "";  // Empty = use built-in cube
-      const unsigned int N_subdivisions = 10;   // 10 subdivisions per direction
+      const std::string  mesh_file_name = "../mesh/square_structured.msh";  // Empty = use built-in cube
+      const unsigned int N_subdivisions = 10;   // subdivisions per direction
       const unsigned int degree         = 2;    // Polynomial degree
       const double       T              = 1.0;  // Final time
       const double       deltat         = 0.005; // Time step
       const double       beta           = 0.25; // Newmark beta (average acceleration)
       const double       gamma          = 0.5;  // Newmark gamma
       const bool         use_manufactured = true;
-      const unsigned int output_frequency = 10; // Output every 10 steps
+      const unsigned int output_frequency = 5; // Output every n steps
 
       Wave problem(mesh_file_name,
                    N_subdivisions,
@@ -39,7 +36,7 @@ main(int argc, char *argv[])
       problem.solve();
 
       // Print final errors
-      if (mpi_rank == 0 && use_manufactured)
+      if (use_manufactured)
         {
           const double eL2_u = problem.compute_error(VectorTools::L2_norm, false);
           const double eH1_u = problem.compute_error(VectorTools::H1_norm, false);

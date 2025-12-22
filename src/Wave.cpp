@@ -2,157 +2,106 @@
 
 void Wave::setup()
 {
-  pcout << "===============================================" << std::endl;
-  pcout << "Initializing Wave Equation Solver" << std::endl;
-  pcout << "===============================================" << std::endl;
+  std::cout << "===============================================" << std::endl;
+  std::cout << "Initializing Wave Equation Solver" << std::endl;
+  std::cout << "===============================================" << std::endl;
 
   // Create or load the mesh.
   {
-    pcout << "Initializing the mesh" << std::endl;
-
-    Triangulation<dim> mesh_serial;
+    std::cout << "Initializing the mesh" << std::endl;
 
     if (mesh_file_name.empty())
     {
       // Use built-in mesh generator
-      pcout << "  Generating built-in mesh with " << N_subdivisions
-            << " subdivisions" << std::endl;
-      
-      // Option 1: Square mesh with simplices (default)
-      GridGenerator::subdivided_hyper_cube(mesh_serial, N_subdivisions, 0.0, 1.0);
+      std::cout << "  Generating built-in mesh with " << N_subdivisions
+                << " subdivisions" << std::endl;
 
-      // Option 2: Circular mesh 
-      // const Point<dim> center(0.5, 0.5);
-      // const double radius = 1.0;
-      // GridGenerator::hyper_ball(mesh_serial, center, radius);
-      // mesh_serial.set_all_manifold_ids(0);
-      // SphericalManifold<dim> boundary_manifold(center);
-      // mesh_serial.set_manifold(0, boundary_manifold);
-      // mesh_serial.refine_global(N_subdivisions - 5);  // Adjust refinement level
-      
-      
-      // Convert to simplex mesh
-      Triangulation<dim> simplex_mesh;
-      GridGenerator::convert_hypercube_to_simplex_mesh(mesh_serial, simplex_mesh);
-      mesh_serial.clear();
-      mesh_serial.copy_triangulation(simplex_mesh);
+      // Generate a hypercube mesh then convert to a simplex mesh for FE_SimplexP
+      Triangulation<dim> hypercube_mesh;
+      GridGenerator::subdivided_hyper_cube(hypercube_mesh, N_subdivisions, 0.0, 1.0);
+      GridGenerator::convert_hypercube_to_simplex_mesh(hypercube_mesh, mesh);
     }
     else
     {
       // Read mesh from file
-      pcout << "  Reading mesh from file: " << mesh_file_name << std::endl;
+      std::cout << "  Reading mesh from file: " << mesh_file_name << std::endl;
       GridIn<dim> grid_in;
-      grid_in.attach_triangulation(mesh_serial);
+      grid_in.attach_triangulation(mesh);
+
       std::ifstream grid_in_file(mesh_file_name);
       grid_in.read_msh(grid_in_file);
     }
-
-    // Partition for MPI
-    GridTools::partition_triangulation(mpi_size, mesh_serial);
-    const auto construction_data = TriangulationDescription::Utilities::
-        create_description_from_triangulation(mesh_serial, MPI_COMM_WORLD);
-    mesh.create_triangulation(construction_data);
-
-    pcout << "  Number of elements = " << mesh.n_global_active_cells() << std::endl;
+    std::cout << "  Number of elements = " << mesh.n_active_cells() << std::endl;
 
     // Write mesh to file for visualization
-    if (mpi_rank == 0 && mesh_file_name.empty())
+    if (mesh_file_name.empty())
     {
       std::ofstream mesh_out("../mesh/generated_mesh.vtk");
       if (mesh_out)
       {
         GridOut grid_out;
-        grid_out.write_vtk(mesh_serial, mesh_out);
-        pcout << "  Mesh saved to ../mesh/generated_mesh.vtk" << std::endl;
+        grid_out.write_vtk(mesh, mesh_out);
+        std::cout << "  Mesh saved to ../mesh/generated_mesh.vtk" << std::endl;
       }
       else
       {
-        pcout << "  Warning: Could not write mesh file (directory may not exist)"
-              << std::endl;
+        std::cout << "  Warning: Could not write mesh file (directory may not exist)"
+                  << std::endl;
       }
     }
   }
 
-  pcout << "-----------------------------------------------" << std::endl;
+  std::cout << "-----------------------------------------------" << std::endl;
 
   // Initialize the finite element space.
   {
-    pcout << "Initializing the finite element space" << std::endl;
+    std::cout << "Initializing the finite element space" << std::endl;
 
     fe = std::make_unique<FE_SimplexP<dim>>(r);
 
-    pcout << "  Degree                     = " << fe->degree << std::endl;
-    pcout << "  DoFs per cell              = " << fe->dofs_per_cell << std::endl;
+    std::cout << "  Degree                     = " << fe->degree << std::endl;
+    std::cout << "  DoFs per cell              = " << fe->dofs_per_cell << std::endl;
 
-    // Use higher quadrature order for accurate integration of high-frequency solutions
-    // QGaussSimplex for 2D triangles supports up to order 5
-    quadrature = std::make_unique<QGaussSimplex<dim>>(r + 1);
+    // Quadrature for simplex elements: labs commonly use r+1; this avoids under-integration
+    // while ensuring the rule is valid for the chosen degree.
+    quadrature = std::make_unique<QGaussSimplex<dim>>(r + 2);
 
-    pcout << "  Quadrature points per cell = " << quadrature->size() << std::endl;
+    std::cout << "  Quadrature points per cell = " << quadrature->size() << std::endl;
   }
 
-  pcout << "-----------------------------------------------" << std::endl;
+  std::cout << "-----------------------------------------------" << std::endl;
 
   // Initialize the DoF handler.
   {
-    pcout << "Initializing the DoF handler" << std::endl;
+    std::cout << "Initializing the DoF handler" << std::endl;
 
     dof_handler.reinit(mesh);
     dof_handler.distribute_dofs(*fe);
 
-    locally_owned_dofs = dof_handler.locally_owned_dofs();
-    DoFTools::extract_locally_relevant_dofs(dof_handler, locally_relevant_dofs);
-
-    pcout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
-    pcout << "  Locally owned DoFs = " << locally_owned_dofs.n_elements() << std::endl;
-
+    std::cout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
   }
 
-  pcout << "-----------------------------------------------" << std::endl;
-
-  // Initialize constraints
-  {
-    pcout << "Initializing constraints" << std::endl;
-    constraints.clear();
-    constraints.reinit(locally_relevant_dofs);
-    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
-    
-    // Add homogeneous Dirichlet BCs on all boundaries
-    Functions::ZeroFunction<dim> zero;
-    for (unsigned int b = 0; b < 4; ++b) // 2D: 4 boundaries
-      VectorTools::interpolate_boundary_values(dof_handler, b, zero, constraints);
-    
-    constraints.close();
-    pcout << "  Constrained DoFs = " << constraints.n_constraints() << std::endl;
-  }
+  std::cout << "-----------------------------------------------" << std::endl;
 
   // Initialize the linear system.
   {
-    pcout << "Initializing the linear system" << std::endl;
+    std::cout << "Initializing the linear system" << std::endl;
 
-    pcout << "  Initializing the sparsity pattern" << std::endl;
-    TrilinosWrappers::SparsityPattern sparsity(locally_owned_dofs,
-                                               locally_relevant_dofs,
-                                               MPI_COMM_WORLD);
-    DoFTools::make_sparsity_pattern(dof_handler, sparsity, constraints);
-    sparsity.compress();
+    DynamicSparsityPattern dsp(dof_handler.n_dofs());
+    DoFTools::make_sparsity_pattern(dof_handler, dsp);
+    sparsity.copy_from(dsp);
+    // std::cout << "  Sparsity pattern created with " << sparsity.n_rows() << " rows and " << sparsity.n_cols() << " cols" << std::endl;
 
-    pcout << "  Initializing the matrices" << std::endl;
     mass_matrix.reinit(sparsity);
     stiffness_matrix.reinit(sparsity);
     lhs_matrix.reinit(sparsity);
 
-    pcout << "  Initializing vectors" << std::endl;
-    system_rhs.reinit(locally_owned_dofs, MPI_COMM_WORLD);
+    system_rhs.reinit(dof_handler.n_dofs());
 
-    solution_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-    solution.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
-
-    velocity_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-    velocity.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
-
-    acceleration_owned.reinit(locally_owned_dofs, MPI_COMM_WORLD);
-    acceleration.reinit(locally_owned_dofs, locally_relevant_dofs, MPI_COMM_WORLD);
+    solution.reinit(dof_handler.n_dofs());
+    velocity.reinit(dof_handler.n_dofs());
+    acceleration.reinit(dof_handler.n_dofs());
+    
   }
 
   // Initialize timing
@@ -160,31 +109,43 @@ void Wave::setup()
   solver_time = 0.0;
   output_time = 0.0;
 
-  pcout << "===============================================" << std::endl;
+  std::cout << "===============================================" << std::endl;
 }
 
-void Wave::enforce_boundary_conditions_on_vector(TrilinosWrappers::MPI::Vector &vec)
+void Wave::enforce_boundary_conditions_on_vector(Vector<double> &vec)
 {
-  for (unsigned int i = 0; i < dof_handler.n_dofs(); ++i)
-  {
-    if (constraints.is_constrained(i) && locally_owned_dofs.is_element(i))
-      vec(i) = 0.0;
-  }
+  // Get boundary values once
+  std::map<types::global_dof_index, double> boundary_values;
+
+  std::map<types::boundary_id, const Function<dim> *> boundary_functions;
+  for (unsigned int b = 0; b < dim * 2; ++b)
+    boundary_functions[b] = &function_g;
+
+  VectorTools::interpolate_boundary_values(dof_handler,
+                                           boundary_functions,
+                                           boundary_values);
+
+  // Zero out boundary values
+  for (const auto &pair : boundary_values)
+    vec(pair.first) = 0.0;
 }
 
 void Wave::assemble_matrices()
 {
-  pcout << "===============================================" << std::endl;
-  pcout << "Assembling the mass and stiffness matrices" << std::endl;
+  // std::cout << "===============================================" << std::endl;
+  std::cout << "Assembling the mass and stiffness matrices" << std::endl;
 
   auto start = std::chrono::high_resolution_clock::now();
 
   const unsigned int dofs_per_cell = fe->dofs_per_cell;
   const unsigned int n_q = quadrature->size();
 
+  
   FEValues<dim> fe_values(*fe,
                           *quadrature,
-                          update_values | update_gradients | update_JxW_values);
+                          update_values | update_gradients |
+                            update_quadrature_points | update_JxW_values);
+
 
   FullMatrix<double> cell_mass_matrix(dofs_per_cell, dofs_per_cell);
   FullMatrix<double> cell_stiffness_matrix(dofs_per_cell, dofs_per_cell);
@@ -196,8 +157,6 @@ void Wave::assemble_matrices()
 
   for (const auto &cell : dof_handler.active_cell_iterators())
   {
-    if (!cell->is_locally_owned())
-      continue;
 
     fe_values.reinit(cell);
 
@@ -222,58 +181,46 @@ void Wave::assemble_matrices()
         }
       }
     }
-
     cell->get_dof_indices(dof_indices);
-
     mass_matrix.add(dof_indices, cell_mass_matrix);
     stiffness_matrix.add(dof_indices, cell_stiffness_matrix);
   }
 
-  mass_matrix.compress(VectorOperation::add);
-  stiffness_matrix.compress(VectorOperation::add);
-
-  // Apply homogeneous Dirichlet boundary conditions (for manufactured solution)
-  // We apply BCs ONCE here and never modify the matrix again
-  if (use_manufactured_solution)
-  {
-    std::map<types::global_dof_index, double> boundary_values;
-
-    for (unsigned int i = 0; i < dof_handler.n_dofs(); ++i)
-    {
-      if (constraints.is_constrained(i))
-        boundary_values[i] = 0.0;
-    }
-
-    TrilinosWrappers::MPI::Vector dummy_solution(locally_owned_dofs, MPI_COMM_WORLD);
-    TrilinosWrappers::MPI::Vector dummy_rhs(locally_owned_dofs, MPI_COMM_WORLD);
-
-    dummy_solution = 0.0;
-    dummy_rhs = 0.0;
-
-    MatrixTools::apply_boundary_values(
-        boundary_values, mass_matrix, dummy_solution, dummy_rhs, true);
-    MatrixTools::apply_boundary_values(
-        boundary_values, stiffness_matrix, dummy_solution, dummy_rhs, true);
-
-    pcout << "  Applied homogeneous Dirichlet BCs to matrices" << std::endl;
-  }
-
+  std::cout << "  Assembling LHS matrix for Newmark method" << std::endl;
   // For Newmark method, we solve: K_eff·a_{n+1} = RHS where K_eff = M + β·Δt²·K
   lhs_matrix.copy_from(mass_matrix);
   lhs_matrix.add(beta * deltat * deltat, stiffness_matrix);
 
-  auto end = std::chrono::high_resolution_clock::now();
-  assembly_time +=
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0;
+  // Apply homogeneous Dirichlet BCs ONCE to the LHS matrix, since BCs are time-independent.
+  // Note: we apply boundary values only to the matrix here; per-step RHS will be zeroed on
+  // boundary DOFs to maintain u=0 consistently without reapplying matrix BCs each timestep.
+  {
+    std::map<types::global_dof_index, double> boundary_values;
+    std::map<types::boundary_id, const Function<dim> *> boundary_functions;
+    for (unsigned int b = 0; b < dim * 2; ++b)
+      boundary_functions[b] = &function_g;
 
-  pcout << "  Matrix assembly completed" << std::endl;
-  pcout << "  Mass matrix Frobenius norm:      " << std::scientific
-        << mass_matrix.frobenius_norm() << std::endl;
-  pcout << "  Stiffness matrix Frobenius norm: " << stiffness_matrix.frobenius_norm()
-        << std::endl;
-  pcout << "  LHS matrix Frobenius norm:       " << lhs_matrix.frobenius_norm()
-        << std::endl;
-  pcout << "===============================================" << std::endl;
+    VectorTools::interpolate_boundary_values(dof_handler,
+                                             boundary_functions,
+                                             boundary_values);
+
+    // Use temporary vectors to modify only the matrix structure.
+    Vector<double> tmp_unknown(dof_handler.n_dofs());
+    Vector<double> tmp_rhs(dof_handler.n_dofs());
+    MatrixTools::apply_boundary_values(boundary_values,
+                                       lhs_matrix,
+                                       tmp_unknown,
+                                       tmp_rhs,
+                                       false);
+  }
+
+  auto end = std::chrono::high_resolution_clock::now();
+  assembly_time += std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0;
+
+  std::cout << "  Mass matrix Frobenius norm:      " << std::scientific << mass_matrix.frobenius_norm() << std::endl;
+  std::cout << "  Stiffness matrix Frobenius norm: " << stiffness_matrix.frobenius_norm() << std::endl;
+  std::cout << "  LHS matrix Frobenius norm:       " << lhs_matrix.frobenius_norm() << std::endl;
+  std::cout << "===============================================" << std::endl;
 }
 
 void Wave::assemble_rhs(const double &time)
@@ -291,14 +238,10 @@ void Wave::assemble_rhs(const double &time)
 
   std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
 
-  
   // Assemble forcing term contribution
   system_rhs = 0.0;
   for (const auto &cell : dof_handler.active_cell_iterators())
   {
-    if (!cell->is_locally_owned())
-      continue;
-
     fe_values.reinit(cell);
     cell_rhs = 0.0;
 
@@ -308,103 +251,120 @@ void Wave::assemble_rhs(const double &time)
       forcing_term.set_time(time);
       const double f_loc = forcing_term.value(fe_values.quadrature_point(q));
 
+      // Check for NaN/Inf in forcing term
+      if (!std::isfinite(f_loc))
+      {
+        std::cout << "    ERROR: Forcing term is " << (std::isnan(f_loc) ? "NaN" : "Inf")
+                  << " at point (" << fe_values.quadrature_point(q) << ")" << std::endl;
+        throw std::runtime_error("Non-finite forcing term");
+      }
+
       for (unsigned int i = 0; i < dofs_per_cell; ++i)
       {
         cell_rhs(i) += f_loc * fe_values.shape_value(i, q) * fe_values.JxW(q);
       }
     }
-
     cell->get_dof_indices(dof_indices);
     system_rhs.add(dof_indices, cell_rhs);
   }
 
-  system_rhs.compress(VectorOperation::add);
-
   // Add contribution from predicted displacement
   // RHS = f - K·u_pred, where u_pred = u^n + Δt·v^n + Δt²·(0.5-β)·a^n
-  TrilinosWrappers::MPI::Vector u_pred(locally_owned_dofs, MPI_COMM_WORLD);
-  
-  u_pred = solution_owned;
-  u_pred.add(deltat, velocity_owned);
-  u_pred.add(deltat * deltat * (0.5 - beta), acceleration_owned);
+  Vector<double> u_pred(dof_handler.n_dofs());
 
-  TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
+  u_pred = solution;
+  u_pred.add(deltat, velocity);
+  u_pred.add(deltat * deltat * (0.5 - beta), acceleration);
+
+  Vector<double> tmp(dof_handler.n_dofs());
   stiffness_matrix.vmult(tmp, u_pred);
   system_rhs.add(-1.0, tmp); // RHS = f - K·u_pred
 
-  enforce_boundary_conditions_on_vector(u_pred);
+  // Zero boundary RHS entries to be consistent with LHS elimination (u=0 on boundary).
   enforce_boundary_conditions_on_vector(system_rhs);
 
   auto end = std::chrono::high_resolution_clock::now();
-  assembly_time +=
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0;
+  assembly_time +=std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0;
+
 }
 
 void Wave::solve_time_step()
 {
+  // std::cout << "  Solving for acceleration at time " << time << std::endl;
   auto start = std::chrono::high_resolution_clock::now();
 
-  // Diagnostic: Check RHS before solving
+  // ===== DIAGNOSTICS =====
+  const double lhs_norm = lhs_matrix.frobenius_norm();
   const double rhs_norm = system_rhs.l2_norm();
-  //pcout << " | RHS norm: " << std::scientific << std::setprecision(2) << rhs_norm;
 
-  SolverControl solver_control(1000, 1e-6 * rhs_norm);
-  SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
+  // std::cout << "    LHS matrix Frobenius norm: " << std::scientific << lhs_norm << std::endl;
+  // std::cout << "    RHS vector L2 norm: " << rhs_norm << std::endl;
 
-  // Choose preconditioner: SSOR (default) or AMG (commented, uncomment for large problems)
-  TrilinosWrappers::PreconditionSSOR preconditioner;
-  preconditioner.initialize(lhs_matrix,
-                            TrilinosWrappers::PreconditionSSOR::AdditionalData(1.0));
+  // Check for NaNs or Infs
+  if (!std::isfinite(lhs_norm) || !std::isfinite(rhs_norm))
+  {
+    std::cout << "    ERROR: Matrix or RHS contains NaN or Inf!" << std::endl;
+    throw std::runtime_error("Non-finite values in system");
+  }
 
-  // Uncomment for AMG preconditioner (better for large problems):
-  // TrilinosWrappers::PreconditionAMG preconditioner;
-  // TrilinosWrappers::PreconditionAMG::AdditionalData amg_data;
-  // amg_data.smoother_sweeps = 2;
-  // amg_data.aggregation_threshold = 0.02;
-  // preconditioner.initialize(lhs_matrix, amg_data);
+  // Check diagonal of matrix (should be non-zero)
+  bool has_zero_diagonal = false;
+  for (unsigned int i = 0; i < lhs_matrix.m(); ++i)
+  {
+    if (std::abs(lhs_matrix.diag_element(i)) < 1e-14)
+    {
+      has_zero_diagonal = true;
+      break;
+    }
+  }
 
-  // Solve for acceleration: M·a_{n+1} = RHS
-  solver.solve(lhs_matrix, acceleration_owned, system_rhs, preconditioner);
+  if (has_zero_diagonal)
+  {
+    std::cout << "    WARNING: Matrix has zero or near-zero diagonal elements!" << std::endl;
+    std::cout << "    This may indicate boundary conditions were not applied correctly." << std::endl;
+  }
+
+  // BCs are time-independent; LHS already has BCs applied at assembly.
+  // We only zero boundary entries on RHS per step in assemble_rhs().
+
+  SolverControl solver_control(1000, 1e-6 * system_rhs.l2_norm());
+  SolverCG<Vector<double>> solver(solver_control);
+
+  // Preconditioner on LHS matrix
+  PreconditionSSOR<SparseMatrix<double>> preconditioner;
+  preconditioner.initialize(lhs_matrix, 1.0);
+
+  // Solve for acceleration: (M+βΔt²K)·a_{n+1} = RHS
+  solver.solve(lhs_matrix, acceleration, system_rhs, preconditioner);
 
   // Diagnostic: Check acceleration after solving
-  const double acc_norm = acceleration_owned.l2_norm();
-  //pcout << " | a norm: " << acc_norm << " | iter: " << solver_control.last_step();
+  // const double acc_norm = acceleration.l2_norm();
+  // std::cout << " | a norm: " << acc_norm << " | iter: " << solver_control.last_step();
 
   if (solver_control.last_step() >= 999)
   {
-    pcout << "  WARNING: Linear solver did not converge! ("
-          << solver_control.last_step() << " iterations)" << std::endl;
+    std::cout << "  WARNING: Linear solver did not converge! ("
+              << solver_control.last_step() << " iterations)" << std::endl;
   }
-  acceleration = acceleration_owned;
 
   auto end = std::chrono::high_resolution_clock::now();
-  solver_time +=
-      std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0;
+  solver_time += std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() / 1000.0;
+
 }
 
 void Wave::project_initial_acceleration()
 {
-  pcout << "  Projecting initial acceleration from PDE" << std::endl;
 
   if (use_manufactured_solution)
   {
     // Directly use exact acceleration from manufactured solution
-    // Use MappingFE for simplex elements
-    const FE_SimplexP<dim> fe_map(1);
-    const MappingFE<dim> mapping(fe_map);
-    
-    exact_acceleration.set_time(0.0);
-    VectorTools::project(mapping,
-                         dof_handler,
-                         constraints,
-                         QGaussSimplex<dim>(r + 1),
-                         exact_acceleration,
-                         acceleration_owned);
-    acceleration_owned.compress(VectorOperation::insert);
-    acceleration = acceleration_owned;
-    acceleration.compress(VectorOperation::insert);
 
-    enforce_boundary_conditions_on_vector(acceleration_owned);
+    exact_acceleration.set_time(0.0);
+    VectorTools::interpolate(dof_handler, exact_acceleration, acceleration);
+
+    enforce_boundary_conditions_on_vector(acceleration);
+
+    // std::cout << "===============================================" << std::endl;
   }
   else
   {
@@ -422,10 +382,9 @@ void Wave::project_initial_acceleration()
 
     system_rhs = 0.0;
 
+    // Assemble forcing term
     for (const auto &cell : dof_handler.active_cell_iterators())
     {
-      if (!cell->is_locally_owned())
-        continue;
 
       fe_values.reinit(cell);
       cell_rhs = 0.0;
@@ -446,31 +405,30 @@ void Wave::project_initial_acceleration()
       system_rhs.add(dof_indices, cell_rhs);
     }
 
-    system_rhs.compress(VectorOperation::add);
-
     // Subtract K·u_0
-    TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
-    stiffness_matrix.vmult(tmp, solution_owned);
+    Vector<double> tmp(dof_handler.n_dofs());
+    stiffness_matrix.vmult(tmp, solution);
     system_rhs.add(-1.0, tmp);
 
-    // Enforce BCs on RHS
-    enforce_boundary_conditions_on_vector(system_rhs);
+    // Apply Dirichlet BCs in-place on mass system and solve M·a_0 = RHS
+    std::map<types::global_dof_index, double> boundary_values;
+    std::map<types::boundary_id, const Function<dim> *> boundary_functions;
+    for (unsigned int b = 0; b < dim * 2; ++b)
+      boundary_functions[b] = &function_g;
+    VectorTools::interpolate_boundary_values(dof_handler, boundary_functions, boundary_values);
 
-    // Solve M·a_0 = RHS
+    MatrixTools::apply_boundary_values(boundary_values, mass_matrix, acceleration, system_rhs, false);
+
     SolverControl solver_control(1000, 1e-6 * system_rhs.l2_norm());
-    SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
-    TrilinosWrappers::PreconditionSSOR preconditioner;
-    preconditioner.initialize(mass_matrix, TrilinosWrappers::PreconditionSSOR::AdditionalData(1.0));
 
-    solver.solve(mass_matrix, acceleration_owned, system_rhs, preconditioner);
-    
-    pcout << "    " << solver_control.last_step() << " CG iterations" << std::endl;
+    SolverCG<Vector<double>> solver(solver_control);
+    PreconditionSSOR<SparseMatrix<double>> preconditioner;
+    preconditioner.initialize(mass_matrix, 1.0);
 
-    acceleration_owned.compress(VectorOperation::insert);
-    acceleration = acceleration_owned;
-    acceleration.compress(VectorOperation::insert);
+    solver.solve(mass_matrix, acceleration, system_rhs, preconditioner);
 
-    enforce_boundary_conditions_on_vector(acceleration_owned);
+    std::cout << "    " << solver_control.last_step() << " CG iterations" << std::endl;
+    enforce_boundary_conditions_on_vector(acceleration);
   }
 }
 
@@ -483,14 +441,15 @@ void Wave::output(const unsigned int &time_step)
   data_out.add_data_vector(dof_handler, velocity, "velocity");
   data_out.add_data_vector(dof_handler, acceleration, "acceleration");
 
-  std::vector<unsigned int> partition_int(mesh.n_active_cells());
-  GridTools::get_subdomain_association(mesh, partition_int);
-  const Vector<double> partitioning(partition_int.begin(), partition_int.end());
-  data_out.add_data_vector(partitioning, "partitioning");
+  // std::vector<unsigned int> partition_int(mesh.n_active_cells());
+  // GridTools::get_subdomain_association(mesh, partition_int);
+  // const Vector<double> partitioning(partition_int.begin(), partition_int.end());
+  // data_out.add_data_vector(partitioning, "partitioning");
 
   data_out.build_patches();
 
-  data_out.write_vtu_with_pvtu_record("./", "output", time_step, MPI_COMM_WORLD, 3);
+  std::ofstream output_file("./output-" + std::to_string(time_step) + ".vtu");
+  data_out.write_vtu(output_file);
 
   auto end = std::chrono::high_resolution_clock::now();
   output_time +=
@@ -499,51 +458,71 @@ void Wave::output(const unsigned int &time_step)
 
 void Wave::write_time_series(const unsigned int &time_step)
 {
-  if (mpi_rank == 0)
+  const double energy = compute_energy();
+  const double power  = compute_power_input(time);
+  const double dE_dt  = (time_step == 0) ? 0.0 : (energy - previous_energy) / deltat;
+  const double residual = dE_dt - power; // For homogeneous Dirichlet and undamped dynamics, ideally ~0
+  // Trapezoidal integration for accumulated work: W_n = W_{n-1} + Δt * (P_n + P_{n-1}) / 2
+  if (time_step == 0)
+    accumulated_work = 0.0;
+  else
+    accumulated_work += deltat * (power + previous_power) * 0.5;
+  const double energy_balance = energy - initial_energy - accumulated_work;
+  const double eL2_u = use_manufactured_solution
+                           ? compute_error(VectorTools::L2_norm, false)
+                           : 0.0;
+  // std::cout << "    eL2_u computed " << eL2_u << std::endl;
+  const double eH1_u = use_manufactured_solution
+                           ? compute_error(VectorTools::H1_norm, false)
+                           : 0.0;
+  // std::cout << "    eH1_u computed " << eH1_u << std::endl;
+  const double eL2_v = use_manufactured_solution
+                           ? compute_error(VectorTools::L2_norm, true)
+                           : 0.0;
+
+  if (time_step == 0)
   {
-    if (time_step == 0)
-    {
-      csv_file.open("../results/time_series.csv");
-      csv_file << "time_step,time,energy,eL2_u,eH1_u,eL2_v" << std::endl;
-    }
-
-    const double energy = compute_energy();
-    const double eL2_u = use_manufactured_solution
-                             ? compute_error(VectorTools::L2_norm, false)
-                             : 0.0;
-    const double eH1_u = use_manufactured_solution
-                             ? compute_error(VectorTools::H1_norm, false)
-                             : 0.0;
-    const double eL2_v = use_manufactured_solution
-                             ? compute_error(VectorTools::L2_norm, true)
-                             : 0.0;
-
-    csv_file << time_step << "," << time << "," << energy << "," << eL2_u << ","
-             << eH1_u << "," << eL2_v << std::endl;
-
-    // Check energy conservation
-    // if (time_step == 0)
-    // {
-    //   initial_energy = energy;
-    // }
-    // else if (initial_energy > 1e-14)
-    // {
-    //   const double energy_drift = std::abs(energy - initial_energy) / initial_energy;
-    //   if (energy_drift > 0.01)
-    //   {
-    //     pcout << "  WARNING: Energy drift = " << energy_drift * 100.0
-    //           << "% (exceeds 1% threshold)" << std::endl;
-    //   }
-    // }
+    // std::cout << "    Creating new CSV file for time-series data" << std::endl;
+    csv_file.open("../results/time_series.csv");
+    csv_file << "time_step,time,energy,power,dE_dt,residual,work,energy_balance,eL2_u,eH1_u,eL2_v" << std::endl;
+    previous_energy = energy;
+    previous_power  = power;
+    initial_energy  = energy;
   }
+
+  csv_file << time_step << "," << time << "," << energy << "," << power << "," << dE_dt
+           << "," << residual << "," << accumulated_work << "," << energy_balance
+           << "," << eL2_u << "," << eH1_u << "," << eL2_v << std::endl;
+
+  previous_energy = energy;
+  previous_power  = power;
+
+  // Check energy conservation
+  // if (time_step == 0)
+  // {
+  //   initial_energy = energy;
+  // }
+  // else if (initial_energy > 1e-14)
+  // {
+  //   const double energy_drift = std::abs(energy - initial_energy) / initial_energy;
+  //   if (energy_drift > 0.01)
+  //   {
+  //     std::cout << "  WARNING: Energy drift = " << energy_drift * 100.0
+  //           << "% (exceeds 1% threshold)" << std::endl;
+  //   }
+  // }
 }
 
 double Wave::compute_error(const VectorTools::NormType &norm_type, const bool for_velocity)
 {
+  // std::cout << "  Computing error ("
+  //       << (for_velocity ? "velocity" : "displacement") << ") in "
+  //       << (norm_type == VectorTools::L2_norm ? "L2 norm" : "H1 norm") << std::endl;
+
   FE_SimplexP<dim> fe_linear(1);
   MappingFE mapping(fe_linear);
 
-  const QGaussSimplex<dim> quadrature_error = QGaussSimplex<dim>(r + 1);
+  const QGaussSimplex<dim> quadrature_error = QGaussSimplex<dim>(r + 2);
 
   Vector<double> error_per_cell(mesh.n_active_cells());
 
@@ -570,8 +549,7 @@ double Wave::compute_error(const VectorTools::NormType &norm_type, const bool fo
                                       norm_type);
   }
 
-  const double error =
-      VectorTools::compute_global_error(mesh, error_per_cell, norm_type);
+  double error = error_per_cell.l2_norm();
 
   return error;
 }
@@ -593,8 +571,6 @@ double Wave::compute_energy()
 
   for (const auto &cell : dof_handler.active_cell_iterators())
   {
-    if (!cell->is_locally_owned())
-      continue;
 
     fe_values.reinit(cell);
 
@@ -610,34 +586,59 @@ double Wave::compute_energy()
     }
   }
 
-  const double global_kinetic_energy =
-      Utilities::MPI::sum(local_kinetic_energy, MPI_COMM_WORLD);
-  const double global_potential_energy =
-      Utilities::MPI::sum(local_potential_energy, MPI_COMM_WORLD);
+  // std::cout << " | Kinetic Energy: " << local_kinetic_energy << " | Potential Energy: " << local_potential_energy << std::endl;
 
-  pcout << " | Kinetic Energy: " << global_kinetic_energy << " | Potential Energy: " << global_potential_energy;
+  return local_kinetic_energy + local_potential_energy;
+}
 
-  return global_kinetic_energy + global_potential_energy;
+double Wave::compute_power_input(const double &time)
+{
+  // Computes P(t) = ∫ f(x,t) v(x,t) dx over the domain
+  const unsigned int n_q = quadrature->size();
+
+  FEValues<dim> fe_values(*fe,
+                          *quadrature,
+                          update_quadrature_points | update_JxW_values | update_values);
+
+  std::vector<double> velocity_values(n_q);
+  double power = 0.0;
+
+  for (const auto &cell : dof_handler.active_cell_iterators())
+  {
+    fe_values.reinit(cell);
+
+    // Evaluate velocity field at quadrature points
+    fe_values.get_function_values(velocity, velocity_values);
+
+    // Accumulate f(x,t) * v(x,t)
+    for (unsigned int q = 0; q < n_q; ++q)
+    {
+      forcing_term.set_time(time);
+      const double f_loc = forcing_term.value(fe_values.quadrature_point(q));
+      power += f_loc * velocity_values[q] * fe_values.JxW(q);
+    }
+  }
+
+  return power;
 }
 
 void Wave::solve()
 {
-  pcout << "===============================================" << std::endl;
-  pcout << "Starting time integration" << std::endl;
-  pcout << "  Newmark parameters: beta = " << beta << ", gamma = " << gamma
-        << std::endl;
-  pcout << "  Time step: " << deltat << std::endl;
-  pcout << "  Final time: " << T << std::endl;
-  pcout << "  Number of time steps: " << static_cast<unsigned int>(T / deltat)
-        << std::endl;
-  pcout << "===============================================" << std::endl;
+  std::cout << "Starting time integration" << std::endl;
+  std::cout << "  Newmark parameters: beta = " << beta << ", gamma = " << gamma
+            << std::endl;
+  std::cout << "  Time step: " << deltat << std::endl;
+  std::cout << "  Final time: " << T << std::endl;
+  std::cout << "  Number of time steps: " << static_cast<unsigned int>(T / deltat)
+            << std::endl;
+  std::cout << "===============================================" << std::endl;
 
   // Assemble constant matrices
   assemble_matrices();
 
   // Apply initial conditions
   {
-    pcout << "Applying initial conditions" << std::endl;
+    // std::cout << "Applying initial conditions" << std::endl;
 
     const Function<dim> *u_init;
     const Function<dim> *v_init;
@@ -654,47 +655,23 @@ void Wave::solve()
       u_init = &u_0;
       v_init = &v_0;
     }
-    
-    // Explicit mapping for simplex elements
-    const FE_SimplexP<dim> fe_map(1);
-    const MappingFE<dim> mapping(fe_map);
 
-    // Project initial displacement
-    VectorTools::project(mapping,
-                         dof_handler,
-                         constraints,
-                         QGaussSimplex<dim>(r + 1),
-                         *u_init,
-                         solution_owned);
-    
-    solution_owned.compress(VectorOperation::insert);
-    solution = solution_owned;
-    solution.compress(VectorOperation::insert);
+    VectorTools::interpolate(dof_handler, *u_init, solution);
+    VectorTools::interpolate(dof_handler, *v_init, velocity);
 
-    // Project initial velocity
-    VectorTools::project(mapping,
-                         dof_handler,
-                         constraints,
-                         QGaussSimplex<dim>(r + 1),
-                         *v_init,
-                         velocity_owned);
-
-    velocity_owned.compress(VectorOperation::insert);
-    velocity = velocity_owned;
-    velocity.compress(VectorOperation::insert);
-
-    enforce_boundary_conditions_on_vector(solution_owned);
-    enforce_boundary_conditions_on_vector(velocity_owned);
+    enforce_boundary_conditions_on_vector(velocity);
+    enforce_boundary_conditions_on_vector(solution);
 
     // Compute or project initial acceleration
     project_initial_acceleration();
 
     // Write initial output
     if (output_frequency == 0)
+    {
+      std::cout << "Writing initial output at time t=0.0" << std::endl;
       output(0);
+    }
     write_time_series(0);
-
-    pcout << "-----------------------------------------------" << std::endl;
   }
 
   unsigned int time_step = 0;
@@ -708,16 +685,15 @@ void Wave::solve()
     time += deltat;
     ++time_step;
 
-    pcout << "Time step " << std::setw(4) << time_step << " | t = " << std::scientific
-          << std::setprecision(4) << time << std::flush;
+    std::cout << "Time step " << std::setw(4) << time_step << " | t = " << std::scientific << std::setprecision(4) << time << std::endl;
 
-    // Save old acceleration for corrector step
-    TrilinosWrappers::MPI::Vector acceleration_old(locally_owned_dofs, MPI_COMM_WORLD);
-    acceleration_old = acceleration_owned;
-    TrilinosWrappers::MPI::Vector velocity_old(locally_owned_dofs, MPI_COMM_WORLD);
-    velocity_old = velocity_owned;
-    TrilinosWrappers::MPI::Vector solution_old(locally_owned_dofs, MPI_COMM_WORLD);
-    solution_old = solution_owned;
+    // Save old state for corrector step
+    Vector<double> acceleration_old(dof_handler.n_dofs());
+    Vector<double> velocity_old(dof_handler.n_dofs());
+    Vector<double> solution_old(dof_handler.n_dofs());
+    acceleration_old = acceleration;
+    velocity_old = velocity;
+    solution_old = solution;
 
     // Assemble RHS (includes predictor for displacement)
     assemble_rhs(time);
@@ -727,35 +703,21 @@ void Wave::solve()
 
     // Corrector: update velocity
     // v_{n+1} = v^n + Δt·[(1-γ)·a^n + γ·a_{n+1}]
-    velocity_owned = velocity_old; // Start from v^n
-    velocity_owned.add(deltat * (1.0 - gamma), acceleration_old);
-    velocity_owned.add(deltat * gamma, acceleration_owned);
-
-    // velocity = velocity_owned;
+    velocity = velocity_old; // Start from v^n
+    velocity.add(deltat * (1.0 - gamma), acceleration_old);
+    velocity.add(deltat * gamma, acceleration);
 
     // Corrector: update displacement
     // u_{n+1} = u^n + Δt·v^n + Δt²·[(0.5-β)·a^n + β·a_{n+1}]
-    solution_owned = solution_old; // Start from u^n
-    solution_owned.add(deltat, velocity_old);
-    solution_owned.add(deltat * deltat * (0.5 - beta), acceleration_old);
-    solution_owned.add(deltat * deltat * beta, acceleration_owned);
+    solution = solution_old; // Start from u^n
+    solution.add(deltat, velocity_old);
+    solution.add(deltat * deltat * (0.5 - beta), acceleration_old);
+    solution.add(deltat * deltat * beta, acceleration);
 
-    // solution = solution_owned;
 
-    acceleration_owned.compress(VectorOperation::insert);
-    acceleration = acceleration_owned;
-    acceleration.compress(VectorOperation::insert);
-
-    velocity_owned.compress(VectorOperation::insert);
-    velocity = velocity_owned;
-    velocity.compress(VectorOperation::insert);
-
-    solution_owned.compress(VectorOperation::insert);
-    solution = solution_owned;
-    solution.compress(VectorOperation::insert);
-
-    enforce_boundary_conditions_on_vector(solution_owned);
-    enforce_boundary_conditions_on_vector(velocity_owned);
+    enforce_boundary_conditions_on_vector(solution);
+    enforce_boundary_conditions_on_vector(velocity);
+    enforce_boundary_conditions_on_vector(acceleration);
 
     // Write output
     if (output_frequency == 0 || time_step % output_frequency == 0)
@@ -763,27 +725,26 @@ void Wave::solve()
 
     write_time_series(time_step);
 
-    pcout << std::endl;
+    // std::cout << std::endl;
   }
 
   // Close CSV file
-  if (mpi_rank == 0)
-    csv_file.close();
+  csv_file.close();
 
   // Print timing summary
   const double total_time = assembly_time + solver_time + output_time;
-  pcout << "===============================================" << std::endl;
-  pcout << "Timing summary:" << std::endl;
-  pcout << "  Assembly:     " << std::fixed << std::setprecision(2) << assembly_time
-        << " s (" << std::setw(5) << std::setprecision(1)
-        << 100.0 * assembly_time / total_time << "%)" << std::endl;
-  pcout << "  Linear solve: " << std::fixed << std::setprecision(2) << solver_time
-        << " s (" << std::setw(5) << std::setprecision(1) << 100.0 * solver_time / total_time
-        << "%)" << std::endl;
-  pcout << "  Output:       " << std::fixed << std::setprecision(2) << output_time
-        << " s (" << std::setw(5) << std::setprecision(1) << 100.0 * output_time / total_time
-        << "%)" << std::endl;
-  pcout << "  Total:        " << std::fixed << std::setprecision(2) << total_time << " s"
-        << std::endl;
-  pcout << "===============================================" << std::endl;
+  std::cout << "===============================================" << std::endl;
+  std::cout << "Timing summary:" << std::endl;
+  std::cout << "  Assembly:     " << std::fixed << std::setprecision(2) << assembly_time
+            << " s (" << std::setw(5) << std::setprecision(1)
+            << 100.0 * assembly_time / total_time << "%)" << std::endl;
+  std::cout << "  Linear solve: " << std::fixed << std::setprecision(2) << solver_time
+            << " s (" << std::setw(5) << std::setprecision(1) << 100.0 * solver_time / total_time
+            << "%)" << std::endl;
+  std::cout << "  Output:       " << std::fixed << std::setprecision(2) << output_time
+            << " s (" << std::setw(5) << std::setprecision(1) << 100.0 * output_time / total_time
+            << "%)" << std::endl;
+  std::cout << "  Total:        " << std::fixed << std::setprecision(2) << total_time << " s"
+            << std::endl;
+  std::cout << "===============================================" << std::endl;
 }

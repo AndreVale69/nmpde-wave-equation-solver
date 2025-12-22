@@ -10,6 +10,11 @@
 #include <deal.II/dofs/dof_tools.h>
 
 #include <deal.II/lac/affine_constraints.h>
+#include <deal.II/lac/sparse_matrix.h>
+#include <deal.II/lac/sparsity_pattern.h>
+#include <deal.II/lac/vector.h>
+#include <deal.II/lac/solver_cg.h>
+#include <deal.II/lac/precondition.h>
 
 #include <deal.II/fe/fe_simplex_p.h>
 #include <deal.II/fe/fe_values.h>
@@ -19,10 +24,6 @@
 #include <deal.II/grid/grid_in.h>
 #include <deal.II/grid/grid_out.h>
 #include <deal.II/grid/grid_tools.h>
-
-#include <deal.II/lac/solver_cg.h>
-#include <deal.II/lac/trilinos_precondition.h>
-#include <deal.II/lac/trilinos_sparse_matrix.h>
 
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/matrix_tools.h>
@@ -47,8 +48,9 @@ using namespace dealii;
 class Wave
 {
 public:
-  /// Physical dimension (2D)
+  /// Physical dimension
   static constexpr unsigned int dim = 2;
+  // static constexpr unsigned int dim = 3;
 
   /**
    * @brief Exact solution for manufactured solution tests.
@@ -68,8 +70,8 @@ public:
     virtual double
     value(const Point<dim> &p, const unsigned int /*component*/ = 0) const override
     {
-      return std::sin(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) *
-             std::sin(3.0 * M_PI * p[1]); // 2D: removed z-component
+      return std::sin(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]); // 2D
+      // return std::sin(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]) * std::sin(4.0 * M_PI * p[2]); // 3D
     }
 
     virtual Tensor<1, dim>
@@ -78,11 +80,12 @@ public:
       Tensor<1, dim> grad;
       const double   time_part = std::sin(omega * get_time());
 
-      grad[0] = time_part * 2.0 * M_PI * std::cos(2.0 * M_PI * p[0]) *
-                std::sin(3.0 * M_PI * p[1]); // 2D: removed z-component
+      grad[0] = time_part * 2.0 * M_PI * std::cos(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]); // 2D
+      // grad[0] = time_part * 2.0 * M_PI * std::cos(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]) * std::sin(4.0 * M_PI * p[2]); // 3D
 
-      grad[1] = time_part * std::sin(2.0 * M_PI * p[0]) * 3.0 * M_PI *
-                std::cos(3.0 * M_PI * p[1]); // 2D: removed z-component
+      grad[1] = time_part * std::sin(2.0 * M_PI * p[0]) * 3.0 * M_PI * std::cos(3.0 * M_PI * p[1]); // 2D
+      // grad[1] = time_part * std::sin(2.0 * M_PI * p[0]) * 3.0 * M_PI * std::cos(3.0 * M_PI * p[1]) * std::sin(4.0 * M_PI * p[2]); // 3D
+      // grad[2] = time_part * std::sin(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]) * 4.0 * M_PI * std::cos(4.0 * M_PI * p[2]); // 3D
 
       return grad;
     }
@@ -107,8 +110,8 @@ public:
     virtual double
     value(const Point<dim> &p, const unsigned int /*component*/ = 0) const override
     {
-      return omega * std::cos(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) *
-             std::sin(3.0 * M_PI * p[1]); // 2D: removed z-component
+      return omega * std::cos(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]); // 2D
+      // return omega * std::cos(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]) * std::sin(4.0 * M_PI * p[2]); // 3D
     }
 
   protected:
@@ -131,8 +134,8 @@ public:
     virtual double
     value(const Point<dim> &p, const unsigned int /*component*/ = 0) const override
     {
-      return -omega * omega * std::sin(omega * get_time()) *
-             std::sin(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]); // 2D: removed z-component
+      return -omega * omega * std::sin(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]); // 2D
+      // return -omega * omega * std::sin(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) * std::sin(3.0 * M_PI * p[1]) * std::sin(4.0 * M_PI * p[2]); // 3D
     }
 
   protected:
@@ -156,9 +159,11 @@ public:
     value(const Point<dim> &p, const unsigned int /*component*/ = 0) const override
     {
       const double laplacian_coefficient = 4.0 + 9.0; // 2² + 3² (2D)
-      return (-omega * omega + laplacian_coefficient * M_PI * M_PI) *
-             std::sin(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) *
-             std::sin(3.0 * M_PI * p[1]); // 2D: removed z-component
+      return (-omega * omega + laplacian_coefficient * M_PI * M_PI) * std::sin(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) *
+             std::sin(3.0 * M_PI * p[1]); // 2D
+      // const double laplacian_coefficient = 4.0 + 9.0 + 16.0; // 2² + 3² + 4² (3D)
+      // return (-omega * omega + laplacian_coefficient * M_PI * M_PI) * std::sin(omega * get_time()) * std::sin(2.0 * M_PI * p[0]) *
+      //        std::sin(3.0 * M_PI * p[1]) * std::sin(4.0 * M_PI * p[2]); // 3D
     }
 
   protected:
@@ -177,6 +182,11 @@ public:
       // Gaussian wave packet centered at (0.5, 0.5) [2D]
       const double r2 = (p[0] - 0.5) * (p[0] - 0.5) + 
                         (p[1] - 0.5) * (p[1] - 0.5);
+      // Gaussian wave packet centered at (0.5, 0.5, 0.5) [3D]
+      // const double r2 = (p[0] - 0.5) * (p[0] - 0.5) +  
+      //                   (p[1] - 0.5) * (p[1] - 0.5) +
+      //                   (p[2] - 0.5) * (p[2] - 0.5);
+  
       return std::exp(-100.0 * r2);
     }
   };
@@ -189,6 +199,25 @@ public:
   public:
     virtual double
     value(const Point<dim> & /*p*/, const unsigned int /*component*/ = 0) const override
+    {
+      return 0.0;
+    }
+  };
+
+  /**
+   * @brief Dirichlet boundary condition function (homogeneous).
+   */
+  class FunctionG : public Function<dim>
+  {
+  public:
+    // Constructor.
+    FunctionG()
+    {}
+
+    // Evaluation.
+    virtual double
+    value(const Point<dim> & /*p*/,
+          const unsigned int /*component*/ = 0) const override
     {
       return 0.0;
     }
@@ -216,10 +245,7 @@ public:
        const double       &gamma_   = 0.5,
        const bool         &use_manufactured_ = true,
        const unsigned int &output_frequency_ = 0)
-    : mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
-    , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
-    , pcout(std::cout, mpi_rank == 0)
-    , T(T_)
+    : T(T_)
     , mesh_file_name(mesh_file_name_)
     , N_subdivisions(N_subdivisions_)
     , r(r_)
@@ -228,9 +254,11 @@ public:
     , gamma(gamma_)
     , use_manufactured_solution(use_manufactured_)
     , output_frequency(output_frequency_)
-    , mesh(MPI_COMM_WORLD)
     , time(0.0)
     , initial_energy(0.0)
+    , assembly_time(0.0)
+    , solver_time(0.0)
+    , output_time(0.0)
   {}
 
   /// Initialize mesh, finite element space, and linear system
@@ -248,6 +276,10 @@ public:
   /// Compute total energy (kinetic + potential)
   double
   compute_energy();
+
+  /// Compute instantaneous power input P(t) = ∫_Ω f(x,t) v(x,t) dx
+  double
+  compute_power_input(const double &time);
 
 protected:
   /// Assemble mass and stiffness matrices (called once)
@@ -275,13 +307,7 @@ protected:
   write_time_series(const unsigned int &time_step);
 
   void
-  enforce_boundary_conditions_on_vector(TrilinosWrappers::MPI::Vector &vec);
-
-  // MPI parallelization ////////////////////////////////////////////////////////
-
-  const unsigned int mpi_size; ///< Number of MPI processes
-  const unsigned int mpi_rank; ///< Current MPI process rank
-  ConditionalOStream pcout;    ///< Parallel output stream
+  enforce_boundary_conditions_on_vector(Vector<double> &vec);
 
   // Problem definition /////////////////////////////////////////////////////////
 
@@ -291,6 +317,7 @@ protected:
   ForcingTerm        forcing_term;        ///< Source term
   FunctionU0         u_0;                 ///< Initial displacement
   FunctionV0         v_0;                 ///< Initial velocity
+  FunctionG          function_g;          ///< Dirichlet BC function
 
   const double T; ///< Final time
 
@@ -305,34 +332,28 @@ protected:
   const bool         use_manufactured_solution;  ///< Use manufactured solution
   const unsigned int output_frequency;           ///< VTU output frequency
 
-  parallel::fullydistributed::Triangulation<dim> mesh; ///< Computational mesh
+  Triangulation<dim> mesh; ///< Computational mesh
 
   std::unique_ptr<FiniteElement<dim>> fe;         ///< Finite element
   std::unique_ptr<Quadrature<dim>>    quadrature; ///< Quadrature formula
 
   DoFHandler<dim> dof_handler; ///< Degree of freedom handler
 
-  IndexSet locally_owned_dofs;    ///< DoFs owned by current process
-  IndexSet locally_relevant_dofs; ///< DoFs relevant to current process
-
-  AffineConstraints<double> constraints; ///< Constraints for hanging nodes and BCs
-
   // Linear algebra /////////////////////////////////////////////////////////////
 
-  TrilinosWrappers::SparseMatrix mass_matrix;      ///< Mass matrix M
-  TrilinosWrappers::SparseMatrix stiffness_matrix; ///< Stiffness matrix K
-  TrilinosWrappers::SparseMatrix lhs_matrix;       ///< LHS: M (for acceleration solve)
+  SparsityPattern sparsity; ///< Sparsity pattern for matrices
 
-  TrilinosWrappers::MPI::Vector system_rhs; ///< Right-hand side vector
+  SparseMatrix<double> mass_matrix;      ///< Mass matrix M
+  SparseMatrix<double> stiffness_matrix; ///< Stiffness matrix K
+  SparseMatrix<double> lhs_matrix;       ///< LHS: M (for acceleration solve)
 
-  TrilinosWrappers::MPI::Vector solution_owned; ///< Displacement u^n (owned)
-  TrilinosWrappers::MPI::Vector solution;       ///< Displacement u^n (ghosted)
+  Vector<double> system_rhs; ///< Right-hand side vector
 
-  TrilinosWrappers::MPI::Vector velocity_owned; ///< Velocity v^n (owned)
-  TrilinosWrappers::MPI::Vector velocity;       ///< Velocity v^n (ghosted)
+  Vector<double> solution;       ///< Displacement u^n (ghosted)
 
-  TrilinosWrappers::MPI::Vector acceleration_owned; ///< Acceleration a^n (owned)
-  TrilinosWrappers::MPI::Vector acceleration;       ///< Acceleration a^n (ghosted)
+  Vector<double> velocity;       ///< Velocity v^n (ghosted)
+
+  Vector<double> acceleration;       ///< Acceleration a^n (ghosted)
 
   // Time stepping //////////////////////////////////////////////////////////////
 
@@ -348,6 +369,10 @@ protected:
   // CSV output /////////////////////////////////////////////////////////////////
 
   std::ofstream csv_file; ///< Time-series CSV file
+
+  double previous_energy = 0.0; ///< Energy at previous step for dE/dt approximation
+  double previous_power  = 0.0; ///< Power at previous step for trapezoidal integration
+  double accumulated_work = 0.0; ///< Accumulated work W(t) ≈ ∫_0^t P(τ) dτ
 };
 
 #endif
