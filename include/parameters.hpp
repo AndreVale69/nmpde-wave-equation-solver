@@ -445,7 +445,7 @@ private:
             // MMS-based problem entries
             problem.u_exact_expr = prm.get("u_exact_expr");
             problem.v_exact_expr = prm.get("v_exact_expr");
-            problem.f_exact_expr  = prm.get("f_exact_expr");
+            problem.f_exact_expr = prm.get("f_exact_expr");
 
             // Expression-based problem entries
             problem.u0_expr = prm.get("u0_expr");
