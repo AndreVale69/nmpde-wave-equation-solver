@@ -1,12 +1,20 @@
 #include "Wave.hpp"
 
+#include "progress_bar.hpp"
 #include "theta_integrator.hpp"
 #include "time_integrator.hpp"
-#include <deal.II/base/function.h>
+
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <numeric>
+#include <sstream>
+#include <string>
 
 void Wave::process_mesh_input() {
     try {
-        std::filesystem::path p(mesh_file_name);
+        const std::filesystem::path p(mesh_file_name);
         if (!p.has_extension()) {
             AssertThrow(false,
                         ExcMessage("Mesh file name must have an extension (.msh or .geo): " +
@@ -48,6 +56,14 @@ void Wave::process_mesh_input() {
 }
 
 void Wave::setup() {
+    pcout << "===============================================" << std::endl;
+
+    // Set up the problem.
+    {
+        pcout << "Setting up the problem" << std::endl;
+        parameters.initialize_problem(mu, boundary_g, boundary_v, forcing_term, u_0, v_0);
+    }
+
     // Create the mesh.
     {
         pcout << "Initializing the mesh" << std::endl;
@@ -93,6 +109,18 @@ void Wave::setup() {
 
         locally_owned_dofs    = dof_handler.locally_owned_dofs();
         locally_relevant_dofs = DoFTools::extract_locally_relevant_dofs(dof_handler);
+
+        // Identify boundary IDs.
+        boundary_ids.clear();
+        // Iterate over all active cells.
+        for (const auto &cell: dof_handler.active_cell_iterators())
+            // Only consider locally owned cells.
+            if (cell->is_locally_owned())
+                // Check each face of the cell.
+                for (unsigned int f = 0; f < cell->n_faces(); ++f)
+                    // If the face is at the boundary, store its boundary ID.
+                    if (cell->face(f)->at_boundary())
+                        boundary_ids.insert(cell->face(f)->boundary_id());
 
         pcout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
     }
@@ -202,15 +230,15 @@ void Wave::assemble_rhs(const double &time, TrilinosWrappers::MPI::Vector &F_out
 
     F_out = 0.0;
 
+    // Set the time for the forcing term function.
+    forcing_term.set_time(time);
+
     for (const auto &cell: dof_handler.active_cell_iterators()) {
         if (!cell->is_locally_owned())
             continue;
 
         fe_values.reinit(cell);
         cell_rhs = 0.0;
-
-        // Compute f at this time
-        forcing_term.set_time(time);
 
         for (unsigned int q = 0; q < n_q; ++q) {
             const double f_loc = forcing_term.value(fe_values.quadrature_point(q));
@@ -226,6 +254,40 @@ void Wave::assemble_rhs(const double &time, TrilinosWrappers::MPI::Vector &F_out
     F_out.compress(VectorOperation::add);
 }
 
+void Wave::make_dirichlet_constraints(const double &time, AffineConstraints<> &constraints) const {
+    // Clear previous constraints
+    constraints.clear();
+
+    // Initialize constraints with locally relevant DoFs
+    constraints.reinit(locally_relevant_dofs);
+
+    // Handle hanging nodes (i.e., non-conforming meshes)
+    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+
+    // Set the time for the boundary condition function
+    boundary_g->set_time(time);
+
+    // Apply Dirichlet boundary conditions for all boundary faces
+    for (const auto id: boundary_ids)
+        VectorTools::interpolate_boundary_values(dof_handler, id, *boundary_g, constraints);
+
+    constraints.close();
+}
+
+void Wave::make_velocity_dirichlet_constraints(const double               time,
+                                               AffineConstraints<double> &constraints) const {
+    constraints.clear();
+    constraints.reinit(locally_relevant_dofs);
+    DoFTools::make_hanging_node_constraints(dof_handler, constraints);
+
+    boundary_v->set_time(time);
+    for (const auto id: boundary_ids)
+        VectorTools::interpolate_boundary_values(dof_handler, id, *boundary_v, constraints);
+
+    constraints.close();
+}
+
+
 void Wave::output(const unsigned int &time_step) const {
     DataOut<dim> data_out;
     data_out.add_data_vector(dof_handler, solution, "u");
@@ -238,8 +300,288 @@ void Wave::output(const unsigned int &time_step) const {
 
     data_out.build_patches();
 
-    data_out.write_vtu_with_pvtu_record("./", "output", time_step, MPI_COMM_WORLD, 3);
+    // Use the vtk output directory from parameters (ensure trailing slash)
+    std::string vtk_dir = parameters.output.vtk_output_directory;
+    if (!vtk_dir.empty() && vtk_dir.back() != '/')
+        vtk_dir.push_back('/');
+
+    data_out.write_vtu_with_pvtu_record(vtk_dir, "output", time_step, MPI_COMM_WORLD, 3);
 }
+
+std::pair<double, double> Wave::compute_errors(const double time) {
+    const auto exact_u = &u_0;
+    const auto exact_v = &v_0;
+    exact_u->set_time(time);
+    exact_v->set_time(time);
+
+    const unsigned int n_q = quadrature->size();
+
+    FEValues<dim> fe_values(
+            *fe, *quadrature, update_values | update_quadrature_points | update_JxW_values);
+
+    std::vector<double> uh_values(n_q);
+    std::vector<double> vh_values(n_q);
+
+    double local_u_sq = 0.0;
+    double local_v_sq = 0.0;
+
+    for (const auto &cell: dof_handler.active_cell_iterators()) {
+        if (!cell->is_locally_owned())
+            continue;
+
+        fe_values.reinit(cell);
+
+        fe_values.get_function_values(solution, uh_values);
+        fe_values.get_function_values(velocity, vh_values);
+
+        for (unsigned int q = 0; q < n_q; ++q) {
+            const Point<dim> &xq = fe_values.quadrature_point(q);
+
+            const double uex = exact_u->value(xq);
+            const double vex = exact_v->value(xq);
+
+            const double eu = uh_values[q] - uex;
+            const double ev = vh_values[q] - vex;
+
+            local_u_sq += eu * eu * fe_values.JxW(q);
+            local_v_sq += ev * ev * fe_values.JxW(q);
+        }
+    }
+
+    // MPI reduction across ranks
+    const double global_u_sq = Utilities::MPI::sum(local_u_sq, MPI_COMM_WORLD);
+    const double global_v_sq = Utilities::MPI::sum(local_v_sq, MPI_COMM_WORLD);
+
+    return {std::sqrt(global_u_sq), std::sqrt(global_v_sq)};
+}
+
+Wave::ErrorStatistics Wave::compute_error_statistics(const std::vector<double> &errors) {
+    ErrorStatistics stats{};
+    // If no errors, return zeros (already zero-initialized)
+    if (errors.empty())
+        return stats;
+
+    const size_t        m    = errors.size();
+    const double        sum  = std::accumulate(errors.begin(), errors.end(), 0.0);
+    const double        mean = sum / static_cast<double>(m);
+    std::vector<double> tmp  = errors;
+    std::sort(tmp.begin(), tmp.end());
+    const double median = (m % 2 == 1) ? tmp[m / 2] : 0.5 * (tmp[m / 2 - 1] + tmp[m / 2]);
+    const double sq_sum =
+            std::accumulate(errors.begin(), errors.end(), 0.0, [&](double a, double b) {
+                return a + (b - mean) * (b - mean);
+            });
+    const double stddev = (m > 0) ? std::sqrt(sq_sum / static_cast<double>(m)) : 0.0;
+    const double rms    = std::sqrt(std::accumulate(errors.begin(),
+                                                 errors.end(),
+                                                 0.0,
+                                                 [](double a, double b) { return a + b * b; }) /
+                                 static_cast<double>(m));
+
+    const auto it_min = std::min_element(errors.begin(), errors.end());
+    const auto it_max = std::max_element(errors.begin(), errors.end());
+
+    stats.mean    = mean;
+    stats.median  = median;
+    stats.std     = stddev;
+    stats.rms     = rms;
+    stats.sum     = sum;
+    stats.min     = (it_min != errors.end()) ? *it_min : 0.0;
+    stats.max     = (it_max != errors.end()) ? *it_max : 0.0;
+    stats.idx_min = (it_min != errors.end())
+                            ? static_cast<size_t>(std::distance(errors.begin(), it_min))
+                            : 0;
+    stats.idx_max = (it_max != errors.end())
+                            ? static_cast<size_t>(std::distance(errors.begin(), it_max))
+                            : 0;
+    return stats;
+}
+
+void Wave::print_error_summary() const {
+    pcout << "===============================================" << std::endl;
+    pcout << "Error summary over time:" << std::endl;
+    pcout << "-----------------------------------------------" << std::endl;
+
+    // If no errors were recorded, exit early
+    if (time_history.empty()) {
+        pcout << "No error history recorded (time_history is empty)." << std::endl;
+        return;
+    }
+
+    // Number of time steps recorded
+    const size_t n = error_u_history.size();
+
+    // u stats
+    const ErrorStatistics u_stats       = compute_error_statistics(error_u_history);
+    const double          u_mean        = u_stats.mean;
+    const double          u_median      = u_stats.median;
+    const double          u_stddev      = u_stats.std;
+    const double          u_rms         = u_stats.rms;
+    const double          u_min         = u_stats.min;
+    const double          u_max         = u_stats.max;
+    const size_t          u_idx_min     = u_stats.idx_min;
+    const size_t          u_idx_max     = u_stats.idx_max;
+    const double          u_time_of_max = time_history[u_idx_max];
+    const double          u_time_of_min = time_history[u_idx_min];
+    const double          u_final       = error_u_history.back();
+
+    // v stats
+    const ErrorStatistics v_stats       = compute_error_statistics(error_v_history);
+    const double          v_mean        = v_stats.mean;
+    const double          v_median      = v_stats.median;
+    const double          v_stddev      = v_stats.std;
+    const double          v_rms         = v_stats.rms;
+    const double          v_min         = v_stats.min;
+    const double          v_max         = v_stats.max;
+    const size_t          v_idx_min     = v_stats.idx_min;
+    const size_t          v_idx_max     = v_stats.idx_max;
+    const double          v_time_of_max = time_history[v_idx_max];
+    const double          v_time_of_min = time_history[v_idx_min];
+    const double          v_final       = error_v_history.back();
+
+    // max relative change between consecutive steps (for u and v)
+    double u_max_rel_change = 0.0;
+    double v_max_rel_change = 0.0;
+    for (size_t i = 1; i < n; ++i) {
+        const double du    = std::abs(error_u_history[i] - error_u_history[i - 1]);
+        const double dv    = std::abs(error_v_history[i] - error_v_history[i - 1]);
+        const double u_rel = (error_u_history[i - 1] != 0.0) ? du / error_u_history[i - 1] : du;
+        const double v_rel = (error_v_history[i - 1] != 0.0) ? dv / error_v_history[i - 1] : dv;
+        u_max_rel_change   = std::max(u_max_rel_change, u_rel);
+        v_max_rel_change   = std::max(v_max_rel_change, v_rel);
+    }
+
+    pcout << "-----------------------------------------------" << std::endl;
+    pcout << "Error summary (L2 norms) over time-steps (n=" << n << "):" << std::endl;
+    pcout << std::fixed;
+    pcout << " u: min                  = " << std::scientific << std::setprecision(5) << u_min
+          << std::endl
+          << "    max                  = " << std::scientific << std::setprecision(5) << u_max
+          << std::endl
+          << "    mean                 = " << std::scientific << std::setprecision(5) << u_mean
+          << std::endl
+          << "    median               = " << std::scientific << std::setprecision(5) << u_median
+          << std::endl
+          << "    stddev               = " << std::scientific << std::setprecision(5) << u_stddev
+          << std::endl
+          << "    rms                  = " << std::scientific << std::setprecision(5) << u_rms
+          << std::endl
+          << "    final                = " << std::scientific << std::setprecision(5) << u_final
+          << std::endl
+          << "    time_of_max          = " << std::fixed << std::setprecision(5) << u_time_of_max
+          << std::endl
+          << "    time_of_min          = " << std::fixed << std::setprecision(5) << u_time_of_min
+          << std::endl
+          << "    max_rel_step_change = " << std::scientific << std::setprecision(5)
+          << u_max_rel_change << std::endl;
+
+    pcout << std::endl;
+
+    pcout << " v: min                 = " << std::scientific << std::setprecision(5) << v_min
+          << std::endl
+          << "    max                 = " << std::scientific << std::setprecision(5) << v_max
+          << std::endl
+          << "    mean                = " << std::scientific << std::setprecision(5) << v_mean
+          << std::endl
+          << "    median              = " << std::scientific << std::setprecision(5) << v_median
+          << std::endl
+          << "    stddev              = " << std::scientific << std::setprecision(5) << v_stddev
+          << std::endl
+          << "    rms                 = " << std::scientific << std::setprecision(5) << v_rms
+          << std::endl
+          << "    final               = " << std::scientific << std::setprecision(5) << v_final
+          << std::endl
+          << "    time_of_max         = " << std::fixed << std::setprecision(5) << v_time_of_max
+          << std::endl
+          << "    time_of_min         = " << std::fixed << std::setprecision(5) << v_time_of_min
+          << std::endl
+          << "    max_rel_step_change = " << std::scientific << std::setprecision(5)
+          << v_max_rel_change << std::endl;
+    pcout << "-----------------------------------------------" << std::endl;
+
+    // Save the extended error history to CSV if requested in parameters (only rank 0 writes)
+    if (parameters.output.compute_error) {
+        if (mpi_rank == 0) {
+            const std::filesystem::path outpath(parameters.output.error_history_file);
+            try {
+                if (outpath.has_parent_path()) {
+                    std::filesystem::create_directories(outpath.parent_path());
+                }
+
+                if (std::ofstream ofs(outpath); ofs) {
+                    // Write CSV header
+                    ofs << "step,time,error_u,error_v,delta_u,delta_v,rel_delta_u,rel_delta_v,cum_"
+                           "mean_u,"
+                           "cum_mean_v,cum_rms_u,cum_rms_v\n";
+
+                    // Write data rows
+                    double prev_u = 0.0, prev_v = 0.0;
+                    double cum_sum_u = 0.0, cum_sum_v = 0.0;
+                    double cum_sq_u = 0.0, cum_sq_v = 0.0;
+
+                    // Loop over all time steps
+                    for (size_t i = 0; i < n; ++i) {
+                        // Current time and errors
+                        const double t  = time_history[i];
+                        const double eu = error_u_history[i];
+                        const double ev = error_v_history[i];
+
+                        // Changes from previous step
+                        const double delta_u = (i > 0) ? (eu - prev_u) : 0.0;
+                        const double delta_v = (i > 0) ? (ev - prev_v) : 0.0;
+                        const double rel_delta_u =
+                                (i > 0 && prev_u != 0.0) ? (delta_u / prev_u) : 0.0;
+                        const double rel_delta_v =
+                                (i > 0 && prev_v != 0.0) ? (delta_v / prev_v) : 0.0;
+
+                        // Cumulative statistics
+                        cum_sum_u += eu;
+                        cum_sum_v += ev;
+                        cum_sq_u += eu * eu;
+                        cum_sq_v += ev * ev;
+
+                        // Cumulative mean and RMS
+                        const double cum_mean_u = cum_sum_u / static_cast<double>(i + 1);
+                        const double cum_mean_v = cum_sum_v / static_cast<double>(i + 1);
+                        const double cum_rms_u  = std::sqrt(cum_sq_u / static_cast<double>(i + 1));
+                        const double cum_rms_v  = std::sqrt(cum_sq_v / static_cast<double>(i + 1));
+
+                        // Write row: step (1-based), time, errors and diagnostics
+                        ofs << (i + 1) << "," << std::fixed << std::setprecision(10) << t << ","
+                            << std::scientific << std::setprecision(10) << eu << ","
+                            << std::scientific << std::setprecision(10) << ev << ","
+                            << std::scientific << std::setprecision(10) << delta_u << ","
+                            << std::scientific << std::setprecision(10) << delta_v << ","
+                            << std::scientific << std::setprecision(10) << rel_delta_u << ","
+                            << std::scientific << std::setprecision(10) << rel_delta_v << ","
+                            << std::scientific << std::setprecision(10) << cum_mean_u << ","
+                            << std::scientific << std::setprecision(10) << cum_mean_v << ","
+                            << std::scientific << std::setprecision(10) << cum_rms_u << ","
+                            << std::scientific << std::setprecision(10) << cum_rms_v << std::endl;
+
+                        prev_u = eu;
+                        prev_v = ev;
+                    }
+
+                    ofs.close();
+                    pcout << "Wrote extended error history to '" << outpath.string() << "'"
+                          << std::endl;
+                } else {
+                    pcout << "Failed to open '" << outpath.string() << "' for writing."
+                          << std::endl;
+                }
+            } catch (const std::exception &e) {
+                pcout << "Exception while trying to write error history to '" << outpath.string()
+                      << "': " << e.what() << std::endl;
+            }
+        }
+    } else {
+        pcout << "Error history saving disabled by parameter 'compute_error'." << std::endl;
+    }
+
+    pcout << "===============================================" << std::endl;
+}
+
 
 void Wave::solve() {
     assemble_matrices();
@@ -257,75 +599,107 @@ void Wave::solve() {
     {
         pcout << "Applying the initial conditions" << std::endl;
 
+        // Set time to 0 for initial conditions
+        u_0.set_time(0.0);
+        v_0.set_time(0.0);
+
         // U^0
         VectorTools::interpolate(dof_handler, u_0, solution_owned);
         solution = solution_owned;
 
+        // Apply Dirichlet constraints to initial displacement
+        AffineConstraints<> constraints_u0;
+        make_dirichlet_constraints(0.0, constraints_u0);
+        constraints_u0.distribute(solution_owned);
+
         // V^0
         VectorTools::interpolate(dof_handler, v_0, velocity_owned);
         velocity = velocity_owned;
+
+        // Apply Dirichlet constraints to initial velocity
+        AffineConstraints<> constraints_v0;
+        make_velocity_dirichlet_constraints(0.0, constraints_v0);
+        constraints_v0.distribute(velocity_owned);
 
         // Output the initial solution (time step 0)
         output(0);
         pcout << "-----------------------------------------------" << std::endl;
     }
 
-    // Build boundary values for homogenous Dirchlet
-    // g=0 => u=0 and v = 0 on  boundary
-    std::map<types::global_dof_index, double> boundary_values_zero;
-    {
-        Functions::ZeroFunction<dim> zero;
+    ProgressBar progress(static_cast<unsigned int>(std::ceil(T / deltat)), MPI_COMM_WORLD, &pcout);
+    progress.for_while(
+            [&](const unsigned int step) -> bool {
+                // step is 1-based: t_n = (step-1)*deltat, t_np1 = step*deltat
+                const double t_n   = (static_cast<double>(step) - 1.0) * deltat;
+                const double t_np1 = static_cast<double>(step) * deltat;
 
-        std::map<types::boundary_id, const Function<dim> *> boundary_functions;
-        for (unsigned int bid = 0; bid < 6; ++bid)
-            boundary_functions[bid] = &zero;
-        VectorTools::interpolate_boundary_values(
-                dof_handler, boundary_functions, boundary_values_zero);
-    }
+                // 1. Assemble the right-hand side at time step n
+                assemble_rhs(t_n, forcing_n); // F^n
+                assemble_rhs(t_np1, forcing_np1); // F^{n+1}
 
-    unsigned int time_step = 0;
-    double       time      = 0;
+                // 2. Create Dirichlet constraints at time step n+1
+                AffineConstraints<> constraints_u_np1;
+                AffineConstraints<> constraints_v_np1;
+                make_dirichlet_constraints(t_np1, constraints_u_np1);
+                make_velocity_dirichlet_constraints(t_np1, constraints_v_np1);
 
-    while (time < T) {
-        const double t_n   = time;
-        const double t_np1 = time + deltat;
+                // 3. Build Dirichlet values map for velocity at time step n+1
+                std::map<types::global_dof_index, double> v_boundary_values;
+                boundary_v->set_time(t_np1);
+                for (const auto id: boundary_ids)
+                    VectorTools::interpolate_boundary_values(
+                            dof_handler, id, *boundary_v, v_boundary_values);
 
-        pcout << "n = " << std::setw(3) << time_step + 1 << ", t = " << std::setw(5) << t_np1 << ":"
-              << std::flush << std::endl;
+                // 4. Advance the solution to time step n+1
+                time_integrator->advance(t_n,
+                                         deltat,
+                                         mass_matrix,
+                                         stiffness_matrix,
+                                         forcing_n,
+                                         forcing_np1,
+                                         constraints_v_np1,
+                                         v_boundary_values,
+                                         solution_owned,
+                                         velocity_owned);
 
-        // 1. Assemble the right-hand side at time step n
-        assemble_rhs(t_n, forcing_n); // F^n
-        assemble_rhs(t_np1, forcing_np1); // F^{n+1}
+                // 5. Apply Dirichlet constraints to the solution and velocity at time step n+1
+                constraints_u_np1.distribute(solution_owned);
+                constraints_v_np1.distribute(velocity_owned);
 
-        time_integrator->advance(t_n,
-                                 deltat,
-                                 mass_matrix,
-                                 stiffness_matrix,
-                                 forcing_n,
-                                 forcing_np1,
-                                 boundary_values_zero,
-                                 solution_owned,
-                                 velocity_owned);
 
-        // Enforce u=0 on boundary after the explicit update (important for wave)
-        for (const auto &it : boundary_values_zero)
-            if (solution_owned.locally_owned_elements().is_element(it.first))
-                solution_owned[it.first] = it.second;
+                // 6. Update the solution and velocity vectors with ghost values
+                solution = solution_owned;
+                velocity = velocity_owned;
+                solution.update_ghost_values();
+                velocity.update_ghost_values();
 
-        solution_owned.compress(VectorOperation::insert);
+                // 6. Compute errors if exact solution is available: store them for later summary
+                if (parameters.problem.type == ProblemType::MMS) {
+                    const auto [error_u, error_v] = compute_errors(t_np1);
+                    // Only rank 0 stores the time/error history to reduce memory on worker ranks
+                    if (mpi_rank == 0) {
+                        time_history.push_back(t_np1);
+                        error_u_history.push_back(error_u);
+                        error_v_history.push_back(error_v);
+                    }
+                }
 
-        // 3. Update ghosted vectors for output
-        solution = solution_owned;
-        solution.update_ghost_values();
+                if (step % output_every == 0) {
+                    output(step);
+                }
 
-        velocity = velocity_owned;
-        velocity.update_ghost_values();
+                return t_np1 < T;
+            },
+            "Time-stepping progress",
+            [&](const unsigned int step) -> std::string {
+                std::ostringstream oss;
+                const double       t_show = static_cast<double>(step) * deltat; // end of this step
+                oss << "t=" << std::fixed << std::setprecision(5) << t_show;
+                return oss.str();
+            });
 
-        time = t_np1;
-        ++time_step;
-
-        if (time_step % output_every == 0) {
-            output(time_step);
-        }
+    // After time-stepping, print an extended error summary if using MMS (only on rank 0)
+    if (parameters.problem.type == ProblemType::MMS && mpi_rank == 0) {
+        print_error_summary();
     }
 }
