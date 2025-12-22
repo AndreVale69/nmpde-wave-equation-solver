@@ -21,4 +21,7 @@ end
 
 subsection Output
   set every = 1
+  set compute_error = true
+  set error_file = crank_nicolson-mesh50-dt0_01/crank_nicolson-mesh50-dt0_01.csv
+  set vtk_directory = crank_nicolson-mesh50-dt0_01
 end

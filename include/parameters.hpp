@@ -1,8 +1,11 @@
 #ifndef NM4PDE_PARAMETERS_HPP
 #define NM4PDE_PARAMETERS_HPP
 
+#include <deal.II/base/mpi.h>
 #include <deal.II/base/parameter_handler.h>
 #include <filesystem>
+#include <iostream>
+#include <unistd.h>
 
 #include "enum/boundary_type.hpp"
 #include "enum/problem_type.hpp"
@@ -111,6 +114,24 @@ struct Parameters {
          * (in terms of time steps) the solution is written to output files.
          */
         unsigned int output_every = 1;
+
+        /**
+         * @brief Whether to compute/save the error history.
+         * Note: this is only meaningful for MMS problems; if set to true
+         * for non-MMS problems it will be ignored (and a warning printed).
+         */
+        bool compute_error = false;
+
+        /**
+         * @brief Path to the CSV file where the error history will be saved.
+         * Used only when compute_error is true (and the problem type is MMS).
+         */
+        std::string error_history_file = kDefaultErrorFile;
+
+        /**
+         * @brief Directory where VTK (.vtu/.pvtu) output files will be written.
+         */
+        std::string vtk_output_directory = kDefaultVTKDir;
     } output;
 
     /**
@@ -239,6 +260,18 @@ private:
      */
     inline static const std::string kDefaultMeshFile =
             (std::filesystem::path("..") / "mesh" / "square_structured.geo").string();
+
+    /**
+     * @brief Default error history CSV file path.
+     */
+    inline static const std::string kDefaultErrorFile =
+            (std::filesystem::path("build") / "error_history.csv").string();
+
+    /**
+     * @brief Default VTK output directory.
+     */
+    inline static const std::string kDefaultVTKDir = std::filesystem::path("build").string();
+
     /**
      * @brief Selection string for time scheme parameter.
      * Lists all available time integration schemes.
@@ -247,6 +280,7 @@ private:
     inline static const std::string kSelectionTimeScheme =
             to_string(TimeScheme::Theta) + "|" + to_string(TimeScheme::CentralDifference) + "|" +
             to_string(TimeScheme::Newmark);
+
     /**
      * @brief Selection string for problem type parameter.
      * Lists all available problem types.
@@ -255,6 +289,7 @@ private:
     inline static const std::string kSelectionProblemType = to_string(ProblemType::Physical) + "|" +
                                                             to_string(ProblemType::MMS) + "|" +
                                                             to_string(ProblemType::Expr);
+
     /**
      * @brief Selection string for boundary condition type parameter.
      * Lists all available boundary condition types.
@@ -356,6 +391,21 @@ private:
         {
             prm.declare_entry(
                     "every", "1", Patterns::Integer(1), "Output frequency in time steps.");
+            prm.declare_entry(
+                    "compute_error",
+                    "false",
+                    Patterns::Bool(),
+                    "Whether to compute and save the error history (useful for MMS problems). "
+                    "If set to true and the problem is not MMS, this option will be ignored.");
+            prm.declare_entry("error_file",
+                              kDefaultErrorFile,
+                              Patterns::Anything(),
+                              "CSV file path where error history will be saved (used if "
+                              "compute_error is true and problem is MMS).");
+            prm.declare_entry("vtk_directory",
+                              kDefaultVTKDir,
+                              Patterns::Anything(),
+                              "Directory where VTK (.vtu/.pvtu) output files will be written.");
         }
         prm.leave_subsection();
     }
@@ -421,9 +471,90 @@ private:
 
         prm.enter_subsection("Output");
         {
-            output.output_every = prm.get_integer("every");
+            output.output_every         = prm.get_integer("every");
+            output.compute_error        = prm.get_bool("compute_error");
+            output.error_history_file   = prm.get("error_file");
+            output.vtk_output_directory = prm.get("vtk_directory");
         }
         prm.leave_subsection();
+
+        // Validate compute_error option based on problem type
+        if (output.compute_error && problem.type != ProblemType::MMS) {
+            pcout << "Warning: 'compute_error' was requested but the problem type is not MMS. "
+                  << "compute_error will be disabled (error history only available for MMS)."
+                  << std::endl;
+            output.compute_error = false;
+        }
+
+        // Interactive prompts (only on rank 0 and only if stdin is a TTY).
+        // TTY: isatty() checks whether the file descriptor refers to a terminal, i.e., whether
+        // the program is run in an interactive terminal session. If not (e.g., input redirection
+        // from a file or non-interactive environment), we skip the prompts.
+        // We ask the user whether to compute error (only meaningful for MMS problems),
+        // and where to save the CSV and the VTK output directory. Answers from rank 0
+        // are broadcast to all other ranks.
+        try {
+            if (mpi_rank == 0 && isatty(fileno(stdin))) {
+                // Ask about computing error (only if MMS)
+                if (problem.type == ProblemType::MMS) {
+                    pcout << "Do you want to compute/save the MMS error history? (y/n) ["
+                          << (output.compute_error ? "y" : "n") << "] : ";
+                    std::string ans;
+                    std::getline(std::cin, ans);
+                    if (!ans.empty()) {
+                        if (ans == "y" || ans == "Y" || ans == "1")
+                            output.compute_error = true;
+                        else
+                            output.compute_error = false;
+                    }
+
+                    // Ask where to save the CSV error history (allow empty to keep current)
+                    pcout << "CSV file for error history [press Enter to keep '"
+                          << output.error_history_file << "'] : ";
+                    std::string csv_path;
+                    std::getline(std::cin, csv_path);
+                    if (!csv_path.empty())
+                        output.error_history_file = csv_path;
+                } else {
+                    pcout << "Note: error computation is only available for MMS problems.\n";
+                }
+
+                // Ask where to write VTK output directory (allow empty to keep current):
+                pcout << "VTK output directory [press Enter to keep '"
+                      << output.vtk_output_directory << "'] : ";
+                std::string vtk_dir;
+                std::getline(std::cin, vtk_dir);
+                if (!vtk_dir.empty())
+                    output.vtk_output_directory = vtk_dir;
+            }
+
+            // Broadcast the (possibly updated) choices to all ranks
+            Utilities::MPI::broadcast(MPI_COMM_WORLD, output.compute_error, 0);
+            Utilities::MPI::broadcast(MPI_COMM_WORLD, output.error_history_file, 0);
+            Utilities::MPI::broadcast(MPI_COMM_WORLD, output.vtk_output_directory, 0);
+        } catch (std::exception &e) {
+            pcout << "Warning: interactive prompts skipped due to exception: " << e.what()
+                  << std::endl;
+        }
+
+        // Inform the user where outputs will be written
+        pcout << "VTK output directory: " << output.vtk_output_directory << std::endl;
+        try {
+            // Create VTK output directory if it does not exist
+            if (!std::filesystem::exists(output.vtk_output_directory)) {
+                std::filesystem::create_directories(output.vtk_output_directory);
+                pcout << "Created VTK output directory: " << output.vtk_output_directory
+                      << std::endl;
+            }
+        } catch (const std::exception &e) {
+            pcout << "Warning: could not create VTK output directory '"
+                  << output.vtk_output_directory << "': " << e.what() << std::endl;
+        }
+
+        // Inform about error history file (if applicable)
+        if (output.compute_error) {
+            pcout << "Error history will be saved to: " << output.error_history_file << std::endl;
+        }
     }
 };
 

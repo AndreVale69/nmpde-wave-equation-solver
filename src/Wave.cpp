@@ -300,7 +300,12 @@ void Wave::output(const unsigned int &time_step) const {
 
     data_out.build_patches();
 
-    data_out.write_vtu_with_pvtu_record("./", "output", time_step, MPI_COMM_WORLD, 3);
+    // Use the vtk output directory from parameters (ensure trailing slash)
+    std::string vtk_dir = parameters.output.vtk_output_directory;
+    if (!vtk_dir.empty() && vtk_dir.back() != '/')
+        vtk_dir.push_back('/');
+
+    data_out.write_vtu_with_pvtu_record(vtk_dir, "output", time_step, MPI_COMM_WORLD, 3);
 }
 
 std::pair<double, double> Wave::compute_errors(const double time) {
@@ -494,71 +499,79 @@ void Wave::print_error_summary() const {
           << v_max_rel_change << std::endl;
     pcout << "-----------------------------------------------" << std::endl;
 
-    // Ask user whether to save the history to a CSV file
-    const std::string default_fname = "./error_history.csv";
-    std::cout << "Save error history to CSV file '" << default_fname << "'? [y/N]: " << std::flush;
-    std::string answer;
-    std::getline(std::cin, answer);
-    if (!answer.empty() && (answer[0] == 'y' || answer[0] == 'Y')) {
-        if (std::ofstream ofs(default_fname); ofs) {
-            // Write CSV header
-            ofs << "step,time,error_u,error_v,delta_u,delta_v,rel_delta_u,rel_delta_v,cum_mean_u,"
-                   "cum_mean_v,cum_rms_u,cum_rms_v\n";
+    // Save the extended error history to CSV if requested in parameters (only rank 0 writes)
+    if (parameters.output.compute_error) {
+        if (mpi_rank == 0) {
+            const std::filesystem::path outpath(parameters.output.error_history_file);
+            try {
+                if (outpath.has_parent_path()) {
+                    std::filesystem::create_directories(outpath.parent_path());
+                }
 
-            // Write data rows
-            double prev_u = 0.0, prev_v = 0.0;
-            double cum_sum_u = 0.0, cum_sum_v = 0.0;
-            double cum_sq_u = 0.0, cum_sq_v = 0.0;
+                if (std::ofstream ofs(outpath); ofs) {
+                    // Write CSV header
+                    ofs << "step,time,error_u,error_v,delta_u,delta_v,rel_delta_u,rel_delta_v,cum_mean_u,"
+                           "cum_mean_v,cum_rms_u,cum_rms_v\n";
 
-            // Loop over all time steps
-            for (size_t i = 0; i < n; ++i) {
-                // Current time and errors
-                const double t  = time_history[i];
-                const double eu = error_u_history[i];
-                const double ev = error_v_history[i];
+                    // Write data rows
+                    double prev_u = 0.0, prev_v = 0.0;
+                    double cum_sum_u = 0.0, cum_sum_v = 0.0;
+                    double cum_sq_u = 0.0, cum_sq_v = 0.0;
 
-                // Changes from previous step
-                const double delta_u     = (i > 0) ? (eu - prev_u) : 0.0;
-                const double delta_v     = (i > 0) ? (ev - prev_v) : 0.0;
-                const double rel_delta_u = (i > 0 && prev_u != 0.0) ? (delta_u / prev_u) : 0.0;
-                const double rel_delta_v = (i > 0 && prev_v != 0.0) ? (delta_v / prev_v) : 0.0;
+                    // Loop over all time steps
+                    for (size_t i = 0; i < n; ++i) {
+                        // Current time and errors
+                        const double t  = time_history[i];
+                        const double eu = error_u_history[i];
+                        const double ev = error_v_history[i];
 
-                // Cumulative statistics
-                cum_sum_u += eu;
-                cum_sum_v += ev;
-                cum_sq_u += eu * eu;
-                cum_sq_v += ev * ev;
+                        // Changes from previous step
+                        const double delta_u     = (i > 0) ? (eu - prev_u) : 0.0;
+                        const double delta_v     = (i > 0) ? (ev - prev_v) : 0.0;
+                        const double rel_delta_u = (i > 0 && prev_u != 0.0) ? (delta_u / prev_u) : 0.0;
+                        const double rel_delta_v = (i > 0 && prev_v != 0.0) ? (delta_v / prev_v) : 0.0;
 
-                // Cumulative mean and RMS
-                const double cum_mean_u = cum_sum_u / static_cast<double>(i + 1);
-                const double cum_mean_v = cum_sum_v / static_cast<double>(i + 1);
-                const double cum_rms_u  = std::sqrt(cum_sq_u / static_cast<double>(i + 1));
-                const double cum_rms_v  = std::sqrt(cum_sq_v / static_cast<double>(i + 1));
+                        // Cumulative statistics
+                        cum_sum_u += eu;
+                        cum_sum_v += ev;
+                        cum_sq_u += eu * eu;
+                        cum_sq_v += ev * ev;
 
-                // Write row: step (1-based), time, errors and diagnostics
-                ofs << (i + 1) << "," << std::fixed << std::setprecision(10) << t << ","
-                    << std::scientific << std::setprecision(10) << eu << "," << std::scientific
-                    << std::setprecision(10) << ev << "," << std::scientific
-                    << std::setprecision(10) << delta_u << "," << std::scientific
-                    << std::setprecision(10) << delta_v << "," << std::scientific
-                    << std::setprecision(10) << rel_delta_u << "," << std::scientific
-                    << std::setprecision(10) << rel_delta_v << "," << std::scientific
-                    << std::setprecision(10) << cum_mean_u << "," << std::scientific
-                    << std::setprecision(10) << cum_mean_v << "," << std::scientific
-                    << std::setprecision(10) << cum_rms_u << "," << std::scientific
-                    << std::setprecision(10) << cum_rms_v << std::endl;
+                        // Cumulative mean and RMS
+                        const double cum_mean_u = cum_sum_u / static_cast<double>(i + 1);
+                        const double cum_mean_v = cum_sum_v / static_cast<double>(i + 1);
+                        const double cum_rms_u  = std::sqrt(cum_sq_u / static_cast<double>(i + 1));
+                        const double cum_rms_v  = std::sqrt(cum_sq_v / static_cast<double>(i + 1));
 
-                prev_u = eu;
-                prev_v = ev;
+                        // Write row: step (1-based), time, errors and diagnostics
+                        ofs << (i + 1) << "," << std::fixed << std::setprecision(10) << t << ","
+                            << std::scientific << std::setprecision(10) << eu << "," << std::scientific
+                            << std::setprecision(10) << ev << "," << std::scientific
+                            << std::setprecision(10) << delta_u << "," << std::scientific
+                            << std::setprecision(10) << delta_v << "," << std::scientific
+                            << std::setprecision(10) << rel_delta_u << "," << std::scientific
+                            << std::setprecision(10) << rel_delta_v << "," << std::scientific
+                            << std::setprecision(10) << cum_mean_u << "," << std::scientific
+                            << std::setprecision(10) << cum_mean_v << "," << std::scientific
+                            << std::setprecision(10) << cum_rms_u << "," << std::scientific
+                            << std::setprecision(10) << cum_rms_v << std::endl;
+
+                        prev_u = eu;
+                        prev_v = ev;
+                    }
+
+                    ofs.close();
+                    pcout << "Wrote extended error history to '" << outpath.string() << "'" << std::endl;
+                } else {
+                    pcout << "Failed to open '" << outpath.string() << "' for writing." << std::endl;
+                }
+            } catch (const std::exception &e) {
+                pcout << "Exception while trying to write error history to '" << outpath.string()
+                      << "': " << e.what() << std::endl;
             }
-
-            ofs.close();
-            pcout << "Wrote extended error history to '" << default_fname << "'" << std::endl;
-        } else {
-            pcout << "Failed to open '" << default_fname << "' for writing." << std::endl;
         }
     } else {
-        pcout << "Did not save error history." << std::endl;
+        pcout << "Error history saving disabled by parameter 'compute_error'." << std::endl;
     }
 
     pcout << "===============================================" << std::endl;
