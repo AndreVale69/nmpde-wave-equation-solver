@@ -25,7 +25,6 @@ main(int argc, char *argv[])
       const bool         use_manufactured = false; // Use Gaussian wave packet
       const unsigned int output_frequency = 20;    // Output every 20 steps
 
-      if (mpi_rank == 0)
         {
           std::cout << "\n"
                     << "======================================================\n"
@@ -54,7 +53,6 @@ main(int argc, char *argv[])
       problem.setup();
       problem.solve();
 
-      if (mpi_rank == 0)
         {
           std::cout << "\n"
                     << "======================================================\n"

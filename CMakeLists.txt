@@ -21,8 +21,3 @@ add_executable(wave-dispersion
   src/Wave.cpp)
 deal_ii_setup_target(wave-dispersion)
 
-# Serial version (no MPI, works correctly)
-add_executable(wave-solver-serial 
-  src/wave-solver-serial.cpp 
-  src/WaveSerial.cpp)
-deal_ii_setup_target(wave-solver-serial)

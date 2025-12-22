@@ -11,9 +11,7 @@
 int
 main(int argc, char *argv[])
 {
-  Utilities::MPI::MPI_InitFinalize mpi_init(argc, argv);
 
-  const unsigned int mpi_rank = Utilities::MPI::this_mpi_process(MPI_COMM_WORLD);
 
   try
     {
@@ -24,7 +22,6 @@ main(int argc, char *argv[])
       // ========================================================================
       // Temporal convergence study (fixed spatial resolution)
       // ========================================================================
-      if (mpi_rank == 0)
         {
           std::cout << "\n"
                     << "======================================================\n"
@@ -58,7 +55,6 @@ main(int argc, char *argv[])
         }
 
       // Print temporal convergence results
-      if (mpi_rank == 0)
         {
           std::ofstream convergence_file("../results/convergence_temporal.csv");
           convergence_file << "dt,eL2_u,order_L2_u,eH1_u,order_H1_u,eL2_v,order_L2_v"
@@ -123,7 +119,6 @@ main(int argc, char *argv[])
       // ========================================================================
       // Spatial convergence study (fixed time step)
       // ========================================================================
-      if (mpi_rank == 0)
         {
           std::cout << "\n"
                     << "======================================================\n"
@@ -156,7 +151,6 @@ main(int argc, char *argv[])
         }
 
       // Print spatial convergence results
-      if (mpi_rank == 0)
         {
           std::ofstream convergence_file("../results/convergence_spatial.csv");
           convergence_file << "h,N,eL2_u,order_L2_u,eH1_u,order_H1_u" << std::endl;
