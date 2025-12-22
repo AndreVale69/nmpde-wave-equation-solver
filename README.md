@@ -274,7 +274,7 @@ They are grouped into subsections.
 
 ### Problem
 - `type` (selection): `physical | mms | expr`
-- `u0_exact_expr`, `v0_exact_expr`, `f_exact_expr` (strings, MMS)
+- `u_exact_expr`, `v_exact_expr`, `f_exact_expr` (strings, MMS)
 - `u0_expr`, `v0_expr`, `f_expr` (strings, expression-based)
 - `mu_expr` (string): coefficient (default `1`)
 
