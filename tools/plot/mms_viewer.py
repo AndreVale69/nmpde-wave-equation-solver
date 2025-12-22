@@ -48,6 +48,30 @@ st.markdown(
         unsafe_allow_html=True,
 )
 
+# helper: convert DataFrame (with index) to a Markdown table
+def df_with_index_to_markdown(df, index_name="metric", value_format=None):
+    cols = list(df.columns)
+    header = "| " + index_name + " | " + " | ".join(cols) + " |"
+    sep = "| --- " + " | ---" * len(cols) + " |"
+    lines = [header, sep]
+    for idx in df.index:
+        row_vals = []
+        for c in cols:
+            v = df.at[idx, c]
+            if pd.isna(v):
+                s = ""
+            else:
+                if value_format is not None:
+                    try:
+                        s = value_format(v)
+                    except Exception:
+                        s = str(v)
+                else:
+                    s = str(v)
+            row_vals.append(s)
+        lines.append("| " + str(idx) + " | " + " | ".join(row_vals) + " |")
+    return "\n".join(lines)
+
 # allow multiple files
 uploaded = st.file_uploader("Upload CSV(s)", type=["csv"], accept_multiple_files=True)
 
@@ -83,6 +107,8 @@ for name, tab in zip(file_names, tabs):
         st.dataframe(df.head(20), width='stretch')
         if st.checkbox(f"Show full dataframe: {name}"):
             st.dataframe(df, width='stretch')
+
+        st.download_button("Download full Markdown", data=df_with_index_to_markdown(df, index_name="column"), file_name=f"{name}_full.md", mime="text/markdown")
 
 # sidebar controls
 st.sidebar.header("Files & Plots")
@@ -244,7 +270,11 @@ if show_table:
 
     st.subheader("Comparison table: summary statistics")
     st.dataframe(stats_display.style.set_table_attributes('style="font-family: monospace;"'))
-    st.download_button("Download comparison CSV", data=stats_df.to_csv(), file_name="comparison_stats.csv", mime="text/csv")
+
+    # full uses numeric formatting for readability
+    md_full = df_with_index_to_markdown(stats_df, index_name="stat", value_format=lambda x: "{:.5e}".format(x) if pd.notna(x) else "")
+
+    st.download_button("Download comparison Markdown (full)", data=md_full, file_name="comparison_stats_full.md", mime="text/markdown")
 
 def fig_to_png_bytes(fig):
     buf = io.BytesIO()
