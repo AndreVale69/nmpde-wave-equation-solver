@@ -51,6 +51,14 @@ struct Parameters {
     // Output CSV file (written by rank 0)
     std::string dissipation_csv = "dissipation.csv";
 
+    // -------------------- Study: Modal --------------------
+    bool enable_modal_study = false;
+    unsigned int modal_every = 1;
+    std::string modal_csv = "modal.csv";
+
+    unsigned int modal_k = 1; // sin(k*pi*x)
+    unsigned int modal_l = 1; // sin(l*pi*y)
+
 
     /**
      * @brief Time integration scheme to use.
@@ -128,6 +136,12 @@ private:
             prm.declare_entry("enable_dissipation", "false", dealii::Patterns::Bool());
             prm.declare_entry("dissipation_every", "1", dealii::Patterns::Integer(1));
             prm.declare_entry("dissipation_csv", "dissipation.csv", dealii::Patterns::Anything());
+            prm.declare_entry("enable_modal", "false", dealii::Patterns::Bool());
+            prm.declare_entry("modal_every", "1", dealii::Patterns::Integer(1));
+            prm.declare_entry("modal_csv", "modal.csv", dealii::Patterns::Anything());
+            prm.declare_entry("modal_k", "1", dealii::Patterns::Integer(1));
+            prm.declare_entry("modal_l", "1", dealii::Patterns::Integer(1));
+
         }
         prm.leave_subsection();
 
@@ -168,9 +182,14 @@ private:
             enable_dissipation_study = prm.get_bool("enable_dissipation");
             dissipation_every        = prm.get_integer("dissipation_every");
             dissipation_csv          = prm.get("dissipation_csv");
+            enable_modal_study = prm.get_bool("enable_modal");
+            modal_every        = prm.get_integer("modal_every");
+            modal_csv          = prm.get("modal_csv");
+            modal_k            = prm.get_integer("modal_k");
+            modal_l            = prm.get_integer("modal_l");
+
         }
         prm.leave_subsection();
-
     }
 };
 

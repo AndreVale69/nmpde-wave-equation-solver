@@ -2,6 +2,12 @@ subsection Study
   set enable_dissipation = true
   set dissipation_every = 1
   set dissipation_csv = dissipation.csv
+
+    set enable_modal = true
+    set modal_every = 1
+    set modal_csv = modal.csv
+    set modal_k = 1
+    set modal_l = 1
 end
 
 subsection Mesh

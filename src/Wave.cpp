@@ -3,6 +3,27 @@
 #include "theta_integrator.hpp"
 #include "time_integrator.hpp"
 #include <deal.II/base/function.h>
+#include <deal.II/numerics/vector_tools.h>
+#include <cmath>
+
+class SineMode2D : public dealii::Function<2>
+{
+public:
+    SineMode2D(const unsigned int k, const unsigned int l)
+        : dealii::Function<2>(1), k(k), l(l)
+    {}
+
+    virtual double value(const dealii::Point<2> &p,
+                         const unsigned int /*component*/ = 0) const override
+    {
+        return std::sin(k * dealii::numbers::PI * p[0]) *
+               std::sin(l * dealii::numbers::PI * p[1]);
+    }
+
+private:
+    const unsigned int k, l;
+};
+
 
 void Wave::process_mesh_input() {
     try {
@@ -307,7 +328,6 @@ void Wave::solve() {
         pcout << "-----------------------------------------------" << std::endl;
     }
 
-
     // Build boundary values for homogenous Dirchlet
     // g=0 => u=0 and v = 0 on  boundary
     std::map<types::global_dof_index, double> boundary_values_zero;
@@ -320,6 +340,50 @@ void Wave::solve() {
         VectorTools::interpolate_boundary_values(
                 dof_handler, boundary_functions, boundary_values_zero);
     }
+
+    // -------------------- Modal study (optional) --------------------
+    TrilinosWrappers::MPI::Vector phi_owned(locally_owned_dofs, MPI_COMM_WORLD);
+    TrilinosWrappers::MPI::Vector Mphi_owned(locally_owned_dofs, MPI_COMM_WORLD);
+    double phi_M_phi = 1.0;
+
+    std::ofstream modal_out;
+
+    if (parameters.enable_modal_study)
+    {
+        // Build phi = sin(k*pi*x) sin(l*pi*y) interpolated on FE space
+        SineMode2D mode_fun(parameters.modal_k, parameters.modal_l);
+        dealii::VectorTools::interpolate(dof_handler, mode_fun, phi_owned);
+
+        // Enforce Dirichlet zero on phi as well (same map you already use)
+        for (const auto &it : boundary_values_zero)
+            phi_owned[it.first] = it.second; // should be 0
+
+        // Precompute Mphi and denom
+        mass_matrix.vmult(Mphi_owned, phi_owned);
+        phi_M_phi = phi_owned * Mphi_owned;
+
+        if (mpi_rank == 0)
+        {
+            modal_out.open(parameters.modal_csv);
+            modal_out << "n,t,a,adot\n";
+        }
+
+        // Log at t=0
+        const double a0    = (solution_owned * Mphi_owned) / phi_M_phi;
+        const double adot0 = (velocity_owned * Mphi_owned) / phi_M_phi;
+
+        if (mpi_rank == 0)
+        {
+            modal_out << 0 << "," << 0.0 << "," << a0 << "," << adot0 << "\n";
+            modal_out.flush();
+        }
+
+        pcout << "[Study] Modal enabled. Mode (k,l)=("
+              << parameters.modal_k << "," << parameters.modal_l
+              << "), writing to " << parameters.modal_csv << std::endl;
+        pcout << "-----------------------------------------------" << std::endl;
+    }
+
 
     unsigned int time_step = 0;
     double       time      = 0;
@@ -360,16 +424,30 @@ void Wave::solve() {
         velocity.update_ghost_values();
 
         // -------------------- Dissipation study (optional) --------------------
-        if (parameters.enable_dissipation_study && (time_step % parameters.dissipation_every == 0))
+        if (parameters.enable_dissipation_study && (time_step+1 % parameters.dissipation_every == 0))
         {
             const double E = compute_energy(solution_owned, velocity_owned);
             if (mpi_rank == 0)
             {
-                dissipation_out << time_step << "," << time << "," << E << "," << (E / E0) << "\n";
+                dissipation_out << (time_step+1) << "," << time << "," << E << "," << (E / E0) << "\n";
                 dissipation_out.flush();
             }
         }
 
+        // -------------------- Modal study (optional) --------------------
+        if (parameters.enable_modal_study &&
+            time_step > 0 &&
+            (time_step % parameters.modal_every == 0))
+        {
+            const double a    = (solution_owned * Mphi_owned) / phi_M_phi;
+            const double adot = (velocity_owned * Mphi_owned) / phi_M_phi;
+
+            if (mpi_rank == 0)
+            {
+                modal_out << time_step << "," << time << "," << a << "," << adot << "\n";
+                modal_out.flush();
+            }
+        }
 
         time = t_np1;
         ++time_step;
