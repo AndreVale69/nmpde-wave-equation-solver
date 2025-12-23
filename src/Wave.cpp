@@ -1,5 +1,7 @@
 #include "Wave.hpp"
 
+#include "time_integrator/central_difference_integrator.hpp"
+#include "time_integrator/newmark_integrator.hpp"
 #include "time_integrator/theta_integrator.hpp"
 #include "time_integrator/time_integrator.hpp"
 #include "utils/mesh_generator.hpp"
@@ -153,9 +155,21 @@ void Wave::setup() {
             pcout << "Initializing the Theta time integrator" << std::endl;
             time_integrator = std::make_unique<ThetaIntegrator>(theta);
             break;
+
+        case TimeScheme::CentralDifference:
+            pcout << "Initializing the Central Difference time integrator" << std::endl;
+            time_integrator = std::make_unique<CentralDifferenceIntegrator>();
+            break;
+
+        case TimeScheme::Newmark:
+            pcout << "Initializing the Newmark time integrator" << std::endl;
+            time_integrator = std::make_unique<NewmarkIntegrator>(); // beta=1/4, gamma=1/2
+            break;
+
         default:
             AssertThrow(false, ExcMessage("Unknown time scheme"));
     }
+
 }
 
 void Wave::solve() {
@@ -460,17 +474,29 @@ void Wave::do_solve() {
                     VectorTools::interpolate_boundary_values(
                             dof_handler, id, *boundary_v, v_boundary_values);
 
+                // Build Dirichlet values map for displacement at time step n+1
+                std::map<types::global_dof_index, double> u_boundary_values;
+                boundary_g->set_time(t_np1);
+                for (const auto id: boundary_ids)
+                    VectorTools::interpolate_boundary_values(
+                        dof_handler, id, *boundary_g, u_boundary_values);
+
+
+
                 // 4. Advance the solution to time step n+1
                 time_integrator->advance(t_n,
-                                         deltat,
-                                         mass_matrix,
-                                         stiffness_matrix,
-                                         forcing_n,
-                                         forcing_np1,
-                                         constraints_v_np1,
-                                         v_boundary_values,
-                                         solution_owned,
-                                         velocity_owned);
+                         deltat,
+                         mass_matrix,
+                         stiffness_matrix,
+                         forcing_n,
+                         forcing_np1,
+                         constraints_u_np1,
+                         u_boundary_values,
+                         constraints_v_np1,
+                         v_boundary_values,
+                         solution_owned,
+                         velocity_owned);
+
 
                 // 5. Apply Dirichlet constraints to the solution and velocity at time step n+1
                 constraints_u_np1.distribute(solution_owned);
