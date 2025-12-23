@@ -95,6 +95,7 @@ add_executable(
         nm4pde
         src/main.cpp
         src/Wave.cpp
+        src/mesh_generator.cpp
         src/theta_integrator.cpp
 )
 
