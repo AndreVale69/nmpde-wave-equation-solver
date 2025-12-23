@@ -3,7 +3,9 @@
 // Main function.
 int main(int argc, char *argv[]) {
     // read wave_prm from command line if provided
-    std::string wave_prm = "../parameters/wave.prm";
+    std::string wave_prm = "../../parameters/wave.prm";
+    const std::filesystem::path main_file_path = std::filesystem::canonical(argv[0]).parent_path();
+    wave_prm = (main_file_path / wave_prm).string();
     if (argc > 1) {
         wave_prm = argv[1];
     } else {
