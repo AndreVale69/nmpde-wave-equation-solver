@@ -10,7 +10,7 @@ subsection Boundary condition
 end
 
 subsection Mesh
-  set mesh_file = ../mesh/square_structured.geo
+  set mesh_file = mesh/square_structured.geo
   set degree    = 1
 end
 
