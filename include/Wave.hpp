@@ -92,9 +92,6 @@ protected:
     // Output.
     void output(const unsigned int &time_step) const;
 
-    // Compute errors with respect to the exact solution at the given time.
-    std::pair<double, double> compute_errors(double time);
-
     // Error statistics structure.
     struct ErrorStatistics {
         double mean;
@@ -108,6 +105,16 @@ protected:
         size_t idx_min;
         size_t idx_max;
     };
+
+    // Error norms structure.
+    struct ErrorNorms {
+        double u_L2;
+        double u_H1;
+        double v_L2;
+    };
+
+    // Compute error norms at the given time.
+    ErrorNorms compute_error_norms(const double time);
 
     // Compute error statistics: min, max, mean, std, rms (root-mean-square).
     static ErrorStatistics compute_error_statistics(const std::vector<double> &errors);
@@ -229,10 +236,10 @@ protected:
     TrilinosWrappers::MPI::Vector velocity;
 
     // Error history (filled during solve when using MMS).
-    // error_u_history[k] and error_v_history[k] correspond to time_history[k].
-    std::vector<double> error_u_history;
-    std::vector<double> error_v_history;
     std::vector<double> time_history;
+    std::vector<double> error_u_L2_history;
+    std::vector<double> error_u_H1_history;
+    std::vector<double> error_v_L2_history;
 
     /**
      * Process the mesh input file. If it is a .geo file, attempt to generate

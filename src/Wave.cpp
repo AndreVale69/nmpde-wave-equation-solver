@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deal.II/fe/mapping_fe.h>
 #include <fstream>
 #include <iomanip>
 #include <numeric>
@@ -316,51 +317,46 @@ void Wave::output(const unsigned int &time_step) const {
     data_out.write_vtu_with_pvtu_record(vtk_dir, "output", time_step, MPI_COMM_WORLD, 3);
 }
 
-std::pair<double, double> Wave::compute_errors(const double time) {
-    const auto exact_u = &u_0;
-    const auto exact_v = &v_0;
-    exact_u->set_time(time);
-    exact_v->set_time(time);
+Wave::ErrorNorms Wave::compute_error_norms(const double time) {
+    AssertThrow(parameters.problem.type == ProblemType::MMS,
+                ExcMessage("compute_error_norms() is intended for MMS verification."));
+    // Exact solutions
+    const auto exact_solution_u = &u_0;
+    const auto exact_solution_v = &v_0;
 
-    const unsigned int n_q = quadrature->size();
+    // Set the time for the exact solutions
+    exact_solution_u->set_time(time);
+    exact_solution_v->set_time(time);
 
-    FEValues<dim> fe_values(
-            *fe, *quadrature, update_values | update_quadrature_points | update_JxW_values);
+    // Quadrature for error evaluation:
+    // for norms, use a bit higher order than assembly because we want accurate errors
+    const QGaussSimplex<dim> q_err(fe->degree + 2);
 
-    std::vector<double> uh_values(n_q);
-    std::vector<double> vh_values(n_q);
+    // Mapping and FE for error evaluation
+    FE_SimplexP<dim> fe_linear(1);
+    MappingFE<dim>   mapping(fe_linear);
 
-    double local_u_sq = 0.0;
-    double local_v_sq = 0.0;
+    // Per-cell error vectors
+    Vector<double> diff_u(mesh.n_active_cells());
+    Vector<double> diff_v(mesh.n_active_cells());
 
-    for (const auto &cell: dof_handler.active_cell_iterators()) {
-        if (!cell->is_locally_owned())
-            continue;
+    // ---- u: L2 ----
+    VectorTools::integrate_difference(
+            mapping, dof_handler, solution, *exact_solution_u, diff_u, q_err, VectorTools::L2_norm);
+    const double u_L2 = VectorTools::compute_global_error(mesh, diff_u, VectorTools::L2_norm);
 
-        fe_values.reinit(cell);
+    // ---- u: H1 ----
+    VectorTools::integrate_difference(
+            mapping, dof_handler, solution, *exact_solution_u, diff_u, q_err, VectorTools::H1_norm);
+    const double u_H1 = VectorTools::compute_global_error(mesh, diff_u, VectorTools::H1_norm);
 
-        fe_values.get_function_values(solution, uh_values);
-        fe_values.get_function_values(velocity, vh_values);
+    // ---- v: L2 ----
+    VectorTools::integrate_difference(
+            mapping, dof_handler, velocity, *exact_solution_v, diff_v, q_err, VectorTools::L2_norm);
+    const double v_L2 = VectorTools::compute_global_error(mesh, diff_v, VectorTools::L2_norm);
 
-        for (unsigned int q = 0; q < n_q; ++q) {
-            const Point<dim> &xq = fe_values.quadrature_point(q);
-
-            const double uex = exact_u->value(xq);
-            const double vex = exact_v->value(xq);
-
-            const double eu = uh_values[q] - uex;
-            const double ev = vh_values[q] - vex;
-
-            local_u_sq += eu * eu * fe_values.JxW(q);
-            local_v_sq += ev * ev * fe_values.JxW(q);
-        }
-    }
-
-    // MPI reduction across ranks
-    const double global_u_sq = Utilities::MPI::sum(local_u_sq, MPI_COMM_WORLD);
-    const double global_v_sq = Utilities::MPI::sum(local_v_sq, MPI_COMM_WORLD);
-
-    return {std::sqrt(global_u_sq), std::sqrt(global_v_sq)};
+    // Return the computed norms
+    return {u_L2, u_H1, v_L2};
 }
 
 Wave::ErrorStatistics Wave::compute_error_statistics(const std::vector<double> &errors) {
@@ -413,98 +409,115 @@ void Wave::print_error_summary() const {
     // If no errors were recorded, exit early
     if (time_history.empty()) {
         pcout << "No error history recorded (time_history is empty)." << std::endl;
+        pcout << "===============================================" << std::endl;
         return;
     }
 
-    // Number of time steps recorded
-    const size_t n = error_u_history.size();
+    // Ensure histories are consistent. If not, truncate to the minimum common size.
+    const size_t n_time = time_history.size();
+    const size_t n_uL2  = error_u_L2_history.size();
+    const size_t n_uH1  = error_u_H1_history.size();
+    const size_t n_vL2  = error_v_L2_history.size();
 
-    // u stats
-    const ErrorStatistics u_stats       = compute_error_statistics(error_u_history);
-    const double          u_mean        = u_stats.mean;
-    const double          u_median      = u_stats.median;
-    const double          u_stddev      = u_stats.std;
-    const double          u_rms         = u_stats.rms;
-    const double          u_min         = u_stats.min;
-    const double          u_max         = u_stats.max;
-    const size_t          u_idx_min     = u_stats.idx_min;
-    const size_t          u_idx_max     = u_stats.idx_max;
-    const double          u_time_of_max = time_history[u_idx_max];
-    const double          u_time_of_min = time_history[u_idx_min];
-    const double          u_final       = error_u_history.back();
-
-    // v stats
-    const ErrorStatistics v_stats       = compute_error_statistics(error_v_history);
-    const double          v_mean        = v_stats.mean;
-    const double          v_median      = v_stats.median;
-    const double          v_stddev      = v_stats.std;
-    const double          v_rms         = v_stats.rms;
-    const double          v_min         = v_stats.min;
-    const double          v_max         = v_stats.max;
-    const size_t          v_idx_min     = v_stats.idx_min;
-    const size_t          v_idx_max     = v_stats.idx_max;
-    const double          v_time_of_max = time_history[v_idx_max];
-    const double          v_time_of_min = time_history[v_idx_min];
-    const double          v_final       = error_v_history.back();
-
-    // max relative change between consecutive steps (for u and v)
-    double u_max_rel_change = 0.0;
-    double v_max_rel_change = 0.0;
-    for (size_t i = 1; i < n; ++i) {
-        const double du    = std::abs(error_u_history[i] - error_u_history[i - 1]);
-        const double dv    = std::abs(error_v_history[i] - error_v_history[i - 1]);
-        const double u_rel = (error_u_history[i - 1] != 0.0) ? du / error_u_history[i - 1] : du;
-        const double v_rel = (error_v_history[i - 1] != 0.0) ? dv / error_v_history[i - 1] : dv;
-        u_max_rel_change   = std::max(u_max_rel_change, u_rel);
-        v_max_rel_change   = std::max(v_max_rel_change, v_rel);
+    const size_t n = std::min({n_time, n_uL2, n_uH1, n_vL2});
+    if (n == 0) {
+        pcout << "No error history recorded (one or more error vectors are empty)." << std::endl;
+        pcout << "===============================================" << std::endl;
+        return;
     }
 
+    if (n != n_time || n != n_uL2 || n != n_uH1 || n != n_vL2) {
+        pcout << "Warning: time/error history sizes mismatch. Truncating to n=" << n << "."
+              << " (time=" << n_time << ", u_L2=" << n_uL2 << ", u_H1=" << n_uH1
+              << ", v_L2=" << n_vL2 << ")" << std::endl;
+    }
+
+    // Create truncated views for statistics computations.
+    const std::vector<double> time(time_history.begin(), time_history.begin() + n);
+    const std::vector<double> u_L2(error_u_L2_history.begin(), error_u_L2_history.begin() + n);
+    const std::vector<double> u_H1(error_u_H1_history.begin(), error_u_H1_history.begin() + n);
+    const std::vector<double> v_L2(error_v_L2_history.begin(), error_v_L2_history.begin() + n);
+
+    // Stats
+    const ErrorStatistics uL2_stats = compute_error_statistics(u_L2);
+    const ErrorStatistics uH1_stats = compute_error_statistics(u_H1);
+    const ErrorStatistics vL2_stats = compute_error_statistics(v_L2);
+
+    const auto safe_time_at = [&](const size_t idx) -> double {
+        return (idx < time.size()) ? time[idx] : time.back();
+    };
+
+    const double uL2_time_of_max = safe_time_at(uL2_stats.idx_max);
+    const double uL2_time_of_min = safe_time_at(uL2_stats.idx_min);
+    const double uH1_time_of_max = safe_time_at(uH1_stats.idx_max);
+    const double uH1_time_of_min = safe_time_at(uH1_stats.idx_min);
+    const double vL2_time_of_max = safe_time_at(vL2_stats.idx_max);
+    const double vL2_time_of_min = safe_time_at(vL2_stats.idx_min);
+
+    const double uL2_final = u_L2.back();
+    const double uH1_final = u_H1.back();
+    const double vL2_final = v_L2.back();
+
+    // max relative change between consecutive steps
+    auto max_rel_step_change = [](const std::vector<double> &e) -> double {
+        if (e.size() < 2)
+            return 0.0;
+        double max_rel = 0.0;
+        for (size_t i = 1; i < e.size(); ++i) {
+            const double de  = std::abs(e[i] - e[i - 1]);
+            const double rel = (e[i - 1] != 0.0) ? de / e[i - 1] : de;
+            max_rel          = std::max(max_rel, rel);
+        }
+        return max_rel;
+    };
+
+    const double uL2_max_rel_change = max_rel_step_change(u_L2);
+    const double uH1_max_rel_change = max_rel_step_change(u_H1);
+    const double vL2_max_rel_change = max_rel_step_change(v_L2);
+
     pcout << "-----------------------------------------------" << std::endl;
-    pcout << "Error summary (L2 norms) over time-steps (n=" << n << "):" << std::endl;
+    pcout << "Error summary over time-steps (n=" << n << "):" << std::endl;
     pcout << std::fixed;
-    pcout << " u: min                  = " << std::scientific << std::setprecision(5) << u_min
-          << std::endl
-          << "    max                  = " << std::scientific << std::setprecision(5) << u_max
-          << std::endl
-          << "    mean                 = " << std::scientific << std::setprecision(5) << u_mean
-          << std::endl
-          << "    median               = " << std::scientific << std::setprecision(5) << u_median
-          << std::endl
-          << "    stddev               = " << std::scientific << std::setprecision(5) << u_stddev
-          << std::endl
-          << "    rms                  = " << std::scientific << std::setprecision(5) << u_rms
-          << std::endl
-          << "    final                = " << std::scientific << std::setprecision(5) << u_final
-          << std::endl
-          << "    time_of_max          = " << std::fixed << std::setprecision(5) << u_time_of_max
-          << std::endl
-          << "    time_of_min          = " << std::fixed << std::setprecision(5) << u_time_of_min
-          << std::endl
-          << "    max_rel_step_change = " << std::scientific << std::setprecision(5)
-          << u_max_rel_change << std::endl;
 
+    auto print_block = [&](const std::string     &label,
+                           const std::string     &norm_name,
+                           const ErrorStatistics &stats,
+                           const double           final_value,
+                           const double           time_of_max,
+                           const double           time_of_min,
+                           const double           max_rel_change) {
+        pcout << " " << label << " (" << norm_name
+              << "):     min                  = " << std::scientific << std::setprecision(5)
+              << stats.min << std::endl
+              << "             max                  = " << std::scientific << std::setprecision(5)
+              << stats.max << std::endl
+              << "             mean                 = " << std::scientific << std::setprecision(5)
+              << stats.mean << std::endl
+              << "             median               = " << std::scientific << std::setprecision(5)
+              << stats.median << std::endl
+              << "             stddev               = " << std::scientific << std::setprecision(5)
+              << stats.std << std::endl
+              << "             rms                  = " << std::scientific << std::setprecision(5)
+              << stats.rms << std::endl
+              << "             final                = " << std::scientific << std::setprecision(5)
+              << final_value << std::endl
+              << "             time_of_max          = " << std::fixed << std::setprecision(5)
+              << time_of_max << std::endl
+              << "             time_of_min          = " << std::fixed << std::setprecision(5)
+              << time_of_min << std::endl
+              << "             max_rel_step_change  = " << std::scientific << std::setprecision(5)
+              << max_rel_change << std::endl;
+    };
+
+    print_block(
+            "u", "L2", uL2_stats, uL2_final, uL2_time_of_max, uL2_time_of_min, uL2_max_rel_change);
     pcout << std::endl;
+    print_block(
+            "u", "H1", uH1_stats, uH1_final, uH1_time_of_max, uH1_time_of_min, uH1_max_rel_change);
+    pcout << std::endl;
+    print_block(
+            "v", "L2", vL2_stats, vL2_final, vL2_time_of_max, vL2_time_of_min, vL2_max_rel_change);
 
-    pcout << " v: min                 = " << std::scientific << std::setprecision(5) << v_min
-          << std::endl
-          << "    max                 = " << std::scientific << std::setprecision(5) << v_max
-          << std::endl
-          << "    mean                = " << std::scientific << std::setprecision(5) << v_mean
-          << std::endl
-          << "    median              = " << std::scientific << std::setprecision(5) << v_median
-          << std::endl
-          << "    stddev              = " << std::scientific << std::setprecision(5) << v_stddev
-          << std::endl
-          << "    rms                 = " << std::scientific << std::setprecision(5) << v_rms
-          << std::endl
-          << "    final               = " << std::scientific << std::setprecision(5) << v_final
-          << std::endl
-          << "    time_of_max         = " << std::fixed << std::setprecision(5) << v_time_of_max
-          << std::endl
-          << "    time_of_min         = " << std::fixed << std::setprecision(5) << v_time_of_min
-          << std::endl
-          << "    max_rel_step_change = " << std::scientific << std::setprecision(5)
-          << v_max_rel_change << std::endl;
     pcout << "-----------------------------------------------" << std::endl;
 
     // Save the extended error history to CSV if requested in parameters (only rank 0 writes)
@@ -518,57 +531,69 @@ void Wave::print_error_summary() const {
 
                 if (std::ofstream ofs(outpath); ofs) {
                     // Write CSV header
-                    ofs << "step,time,error_u,error_v,delta_u,delta_v,rel_delta_u,rel_delta_v,cum_"
-                           "mean_u,"
-                           "cum_mean_v,cum_rms_u,cum_rms_v\n";
+                    ofs << "step,time,error_u_L2,error_u_H1,error_v_L2,"
+                           "delta_u_L2,delta_u_H1,delta_v_L2,"
+                           "rel_delta_u_L2,rel_delta_u_H1,rel_delta_v_L2,"
+                           "cum_mean_u_L2,cum_mean_u_H1,cum_mean_v_L2,"
+                           "cum_rms_u_L2,cum_rms_u_H1,cum_rms_v_L2\n";
 
                     // Write data rows
-                    double prev_u = 0.0, prev_v = 0.0;
-                    double cum_sum_u = 0.0, cum_sum_v = 0.0;
-                    double cum_sq_u = 0.0, cum_sq_v = 0.0;
+                    double prev_uL2 = 0.0, prev_uH1 = 0.0, prev_vL2 = 0.0;
+                    double cum_sum_uL2 = 0.0, cum_sum_uH1 = 0.0, cum_sum_vL2 = 0.0;
+                    double cum_sq_uL2 = 0.0, cum_sq_uH1 = 0.0, cum_sq_vL2 = 0.0;
 
-                    // Loop over all time steps
                     for (size_t i = 0; i < n; ++i) {
-                        // Current time and errors
-                        const double t  = time_history[i];
-                        const double eu = error_u_history[i];
-                        const double ev = error_v_history[i];
+                        const double t    = time[i];
+                        const double euL2 = u_L2[i];
+                        const double euH1 = u_H1[i];
+                        const double evL2 = v_L2[i];
 
-                        // Changes from previous step
-                        const double delta_u = (i > 0) ? (eu - prev_u) : 0.0;
-                        const double delta_v = (i > 0) ? (ev - prev_v) : 0.0;
-                        const double rel_delta_u =
-                                (i > 0 && prev_u != 0.0) ? (delta_u / prev_u) : 0.0;
-                        const double rel_delta_v =
-                                (i > 0 && prev_v != 0.0) ? (delta_v / prev_v) : 0.0;
+                        const double delta_uL2 = (i > 0) ? (euL2 - prev_uL2) : 0.0;
+                        const double delta_uH1 = (i > 0) ? (euH1 - prev_uH1) : 0.0;
+                        const double delta_vL2 = (i > 0) ? (evL2 - prev_vL2) : 0.0;
 
-                        // Cumulative statistics
-                        cum_sum_u += eu;
-                        cum_sum_v += ev;
-                        cum_sq_u += eu * eu;
-                        cum_sq_v += ev * ev;
+                        const double rel_delta_uL2 =
+                                (i > 0 && prev_uL2 != 0.0) ? (delta_uL2 / prev_uL2) : 0.0;
+                        const double rel_delta_uH1 =
+                                (i > 0 && prev_uH1 != 0.0) ? (delta_uH1 / prev_uH1) : 0.0;
+                        const double rel_delta_vL2 =
+                                (i > 0 && prev_vL2 != 0.0) ? (delta_vL2 / prev_vL2) : 0.0;
 
-                        // Cumulative mean and RMS
-                        const double cum_mean_u = cum_sum_u / static_cast<double>(i + 1);
-                        const double cum_mean_v = cum_sum_v / static_cast<double>(i + 1);
-                        const double cum_rms_u  = std::sqrt(cum_sq_u / static_cast<double>(i + 1));
-                        const double cum_rms_v  = std::sqrt(cum_sq_v / static_cast<double>(i + 1));
+                        cum_sum_uL2 += euL2;
+                        cum_sum_uH1 += euH1;
+                        cum_sum_vL2 += evL2;
+                        cum_sq_uL2 += euL2 * euL2;
+                        cum_sq_uH1 += euH1 * euH1;
+                        cum_sq_vL2 += evL2 * evL2;
 
-                        // Write row: step (1-based), time, errors and diagnostics
+                        const double denom        = static_cast<double>(i + 1);
+                        const double cum_mean_uL2 = cum_sum_uL2 / denom;
+                        const double cum_mean_uH1 = cum_sum_uH1 / denom;
+                        const double cum_mean_vL2 = cum_sum_vL2 / denom;
+                        const double cum_rms_uL2  = std::sqrt(cum_sq_uL2 / denom);
+                        const double cum_rms_uH1  = std::sqrt(cum_sq_uH1 / denom);
+                        const double cum_rms_vL2  = std::sqrt(cum_sq_vL2 / denom);
+
                         ofs << (i + 1) << "," << std::fixed << std::setprecision(10) << t << ","
-                            << std::scientific << std::setprecision(10) << eu << ","
-                            << std::scientific << std::setprecision(10) << ev << ","
-                            << std::scientific << std::setprecision(10) << delta_u << ","
-                            << std::scientific << std::setprecision(10) << delta_v << ","
-                            << std::scientific << std::setprecision(10) << rel_delta_u << ","
-                            << std::scientific << std::setprecision(10) << rel_delta_v << ","
-                            << std::scientific << std::setprecision(10) << cum_mean_u << ","
-                            << std::scientific << std::setprecision(10) << cum_mean_v << ","
-                            << std::scientific << std::setprecision(10) << cum_rms_u << ","
-                            << std::scientific << std::setprecision(10) << cum_rms_v << std::endl;
+                            << std::scientific << std::setprecision(10) << euL2 << ","
+                            << std::scientific << std::setprecision(10) << euH1 << ","
+                            << std::scientific << std::setprecision(10) << evL2 << ","
+                            << std::scientific << std::setprecision(10) << delta_uL2 << ","
+                            << std::scientific << std::setprecision(10) << delta_uH1 << ","
+                            << std::scientific << std::setprecision(10) << delta_vL2 << ","
+                            << std::scientific << std::setprecision(10) << rel_delta_uL2 << ","
+                            << std::scientific << std::setprecision(10) << rel_delta_uH1 << ","
+                            << std::scientific << std::setprecision(10) << rel_delta_vL2 << ","
+                            << std::scientific << std::setprecision(10) << cum_mean_uL2 << ","
+                            << std::scientific << std::setprecision(10) << cum_mean_uH1 << ","
+                            << std::scientific << std::setprecision(10) << cum_mean_vL2 << ","
+                            << std::scientific << std::setprecision(10) << cum_rms_uL2 << ","
+                            << std::scientific << std::setprecision(10) << cum_rms_uH1 << ","
+                            << std::scientific << std::setprecision(10) << cum_rms_vL2 << std::endl;
 
-                        prev_u = eu;
-                        prev_v = ev;
+                        prev_uL2 = euL2;
+                        prev_uH1 = euH1;
+                        prev_vL2 = evL2;
                     }
 
                     ofs.close();
@@ -683,12 +708,12 @@ void Wave::solve() {
 
                 // 6. Compute errors if exact solution is available: store them for later summary
                 if (parameters.problem.type == ProblemType::MMS) {
-                    const auto [error_u, error_v] = compute_errors(t_np1);
-                    // Only rank 0 stores the time/error history to reduce memory on worker ranks
+                    const auto [u_L2, u_H1, v_L2] = compute_error_norms(t_np1);
                     if (mpi_rank == 0) {
                         time_history.push_back(t_np1);
-                        error_u_history.push_back(error_u);
-                        error_v_history.push_back(error_v);
+                        error_u_L2_history.push_back(u_L2);
+                        error_u_H1_history.push_back(u_H1);
+                        error_v_L2_history.push_back(v_L2);
                     }
                 }
 
