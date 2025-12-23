@@ -23,7 +23,10 @@ end
 
 subsection Output
   set every = 1
-  set compute_error = true
-  set error_file = crank_nicolson-mesh50-dt0_01/crank_nicolson-mesh50-dt0_01.csv
-  set vtk_directory = crank_nicolson-mesh50-dt0_01
+  set compute_error = false
+  set convergence_study = true
+  set convergence_type = space
+  set convergence_csv = results/space_convergence/crank_nicolson/h0_01.csv
+  set error_file = convergence-dt0_01/convergence-dt0_01.csv
+  set vtk_directory = convergence-dt0_01
 end

@@ -4,13 +4,16 @@
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/parameter_handler.h>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <unistd.h>
 
 #include "enum/boundary_type.hpp"
+#include "enum/convergence_type.hpp"
 #include "enum/problem_type.hpp"
 #include "enum/time_scheme.hpp"
-#include "problem_functions.hpp"
+#include "functions/problem_functions.hpp"
+#include "utils/conditional_o_stream_wrapper.hpp"
 
 /**
  * @brief Structure to hold simulation parameters.
@@ -30,17 +33,17 @@ struct Parameters {
          */
         std::string u0_expr = "x*(1-x)*y*(1-y)";
         /**
-         * @brief Exact initial displacement expression (for MMS problems).
+         * @brief Exact displacement expression (for MMS problems).
          */
-        std::string u0_exact_expr = ManufacturedSolution<dim>().get_expression();
+        std::string u_exact_expr = ManufacturedSolution<dim>().get_expression();
         /**
          * @brief Initial velocity expression (for expression-based problems).
          */
         std::string v0_expr = "0";
         /**
-         * @brief Exact initial velocity expression (for MMS problems).
+         * @brief Exact velocity expression (for MMS problems).
          */
-        std::string v0_exact_expr = ManufacturedVelocity<dim>().get_expression();
+        std::string v_exact_expr = ManufacturedVelocity<dim>().get_expression();
         /**
          * @brief Forcing term expression (for expression-based problems).
          */
@@ -132,6 +135,30 @@ struct Parameters {
         bool compute_error = false;
 
         /**
+         * @brief Whether to run a convergence study.
+         *
+         * This option is meaningful if and only if the problem type is MMS.
+         * If enabled for non-MMS problems it will be disabled (and a warning printed).
+         *
+         * When enabled in MMS mode, a convergence type must be provided.
+         */
+        bool convergence_study = false;
+
+        /**
+         * @brief Convergence study type (time or space).
+         * Only used when convergence_study is true.
+         */
+        ConvergenceType convergence_type = ConvergenceType::Time;
+
+        /**
+         * @brief Optional path to a CSV file where the convergence table will be written.
+         *
+         * This option is meaningful if and only if convergence_study is true.
+         * If provided while convergence_study is false, it will be ignored (and cleared).
+         */
+        std::string convergence_csv = "";
+
+        /**
          * @brief Path to the CSV file where the error history will be saved.
          * Used only when compute_error is true (and the problem type is MMS).
          */
@@ -149,11 +176,11 @@ struct Parameters {
      */
     explicit Parameters(const std::string &filename)
         : mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
-        , pcout(std::cout, mpi_rank == 0) {
+        , pcout(std::cout, mpi_rank == 0)
+        , prm(ParameterHandler()) {
         pcout << "Reading parameters from file: " << filename << std::endl;
-        ParameterHandler prm;
-        declare(prm);
-        parse(prm, filename);
+        declare();
+        parse(filename);
     }
 
     /**
@@ -171,7 +198,7 @@ struct Parameters {
                             std::unique_ptr<Function<dim>> &boundary_v,
                             FunctionParser<dim>            &forcing_term,
                             FunctionParser<dim>            &u_0,
-                            FunctionParser<dim>            &v_0) {
+                            FunctionParser<dim>            &v_0) const {
         const std::string                   vars      = "x,y,t";
         const std::map<std::string, double> constants = {
                 {"pi", numbers::PI}, {"PI", numbers::PI}, {"Pi", numbers::PI}};
@@ -201,7 +228,7 @@ struct Parameters {
                 boundary_g = std::make_unique<BoundaryGZero<dim>>();
             } else if (boundary_condition.type == BoundaryType::MMS) {
                 auto fp = std::make_unique<FunctionParser<dim>>();
-                fp->initialize(vars, problem.u0_exact_expr, constants, true);
+                fp->initialize(vars, problem.u_exact_expr, constants, true);
                 boundary_g = std::move(fp);
             } else {
                 auto fp = std::make_unique<FunctionParser<dim>>();
@@ -217,7 +244,7 @@ struct Parameters {
                 boundary_v = std::make_unique<BoundaryVZero<dim>>();
             } else if (boundary_condition.type == BoundaryType::MMS) {
                 auto fp = std::make_unique<FunctionParser<dim>>();
-                fp->initialize(vars, problem.v0_exact_expr, constants, true);
+                fp->initialize(vars, problem.v_exact_expr, constants, true);
                 boundary_v = std::move(fp);
             } else {
                 auto fp = std::make_unique<FunctionParser<dim>>();
@@ -230,7 +257,7 @@ struct Parameters {
         {
             pcout << "    Initializing the initial condition" << std::endl;
             if (problem.type == ProblemType::MMS) {
-                u_0.initialize(vars, problem.u0_exact_expr, constants, true);
+                u_0.initialize(vars, problem.u_exact_expr, constants, true);
             } else if (problem.type == ProblemType::Expr) {
                 u_0.initialize(vars, problem.u0_expr, constants, true);
             } else {
@@ -242,13 +269,51 @@ struct Parameters {
         {
             pcout << "    Initializing the initial velocity" << std::endl;
             if (problem.type == ProblemType::MMS) {
-                v_0.initialize(vars, problem.v0_exact_expr, constants, true);
+                v_0.initialize(vars, problem.v_exact_expr, constants, true);
             } else if (problem.type == ProblemType::Expr) {
                 v_0.initialize(vars, problem.v0_expr, constants, true);
             } else {
                 v_0.initialize(vars, "0", constants, true);
             }
         }
+    }
+
+    /**
+     * @brief Write the current parameter values back to a deal.II-style .prm file.
+     *
+     * This implementation uses deal.II's ParameterHandler printing facilities.
+     * It first syncs the internal ParameterHandler (`prm`) with the current struct values,
+     * then prints the full parameter tree.
+     *
+     * @param filepath Path to the output .prm file.
+     */
+    void write_back_to_file(const std::string &filepath) {
+        const std::filesystem::path out_path(filepath);
+        try {
+            if (out_path.has_parent_path()) {
+                std::filesystem::create_directories(out_path.parent_path());
+            }
+        } catch (const std::exception &e) {
+            pcout << "Warning: could not create directory for prm output '" << filepath
+                  << "': " << e.what() << std::endl;
+        }
+
+        // Sync current values into the internal ParameterHandler.
+        // The ParameterHandler already has all entries declared in the constructor.
+        update();
+
+        std::ofstream out(filepath);
+        if (!out) {
+            throw std::runtime_error("Cannot open prm output file for writing: " + filepath);
+        }
+
+        prm.print_parameters(out, ParameterHandler::OutputStyle::PRM);
+        out.flush();
+        if (!out) {
+            throw std::runtime_error("Failed while writing prm output file: " + filepath);
+        }
+
+        pcout << "Wrote parameters to: " << filepath << std::endl;
     }
 
 private:
@@ -260,7 +325,12 @@ private:
     /**
      * @brief Parallel output stream.
      */
-    ConditionalOStream pcout;
+    ConditionalOStreamWrapper pcout;
+
+    /**
+     * @brief Internal ParameterHandler instance.
+     */
+    ParameterHandler prm;
 
     /**
      * @brief Default mesh file path.
@@ -308,10 +378,15 @@ private:
                                                              to_string(BoundaryType::Expr);
 
     /**
-     * @brief Declare parameters in the given ParameterHandler.
-     * @param prm ParameterHandler object to declare parameters in.
+     * @brief Selection string for convergence study type parameter.
      */
-    static void declare(ParameterHandler &prm) {
+    inline static const std::string kSelectionConvergenceType =
+            to_string(ConvergenceType::Time) + "|" + to_string(ConvergenceType::Space);
+
+    /**
+     * @brief Declare parameters in the given ParameterHandler.
+     */
+    void declare() {
         prm.enter_subsection("Problem");
         {
             prm.declare_entry(
@@ -322,12 +397,12 @@ private:
                     "'mms' for manufactured solution, 'expr' for expression-based problem.");
 
             // MMS-based problem entries
-            prm.declare_entry("u0_exact_expr",
+            prm.declare_entry("u_exact_expr",
                               ManufacturedSolution<dim>().get_expression(),
                               Patterns::Anything(),
                               "Exact initial displacement expression (for MMS problems). For "
                               "example, u_0(x) = u_{ex}(x,0).");
-            prm.declare_entry("v0_exact_expr",
+            prm.declare_entry("v_exact_expr",
                               ManufacturedVelocity<dim>().get_expression(),
                               Patterns::Anything(),
                               "Exact initial velocity expression (for MMS problems). For example, "
@@ -417,6 +492,28 @@ private:
                     Patterns::Bool(),
                     "Whether to compute and save the error history (useful for MMS problems). "
                     "If set to true and the problem is not MMS, this option will be ignored.");
+
+            prm.declare_entry(
+                    "convergence_study",
+                    "false",
+                    Patterns::Bool(),
+                    "Whether to run a convergence study (only meaningful for MMS problems). "
+                    "If set to true and the problem is not MMS, this option will be ignored.");
+
+            prm.declare_entry("convergence_type",
+                              to_string(ConvergenceType::Time),
+                              Patterns::Selection(kSelectionConvergenceType),
+                              "Convergence study type (only if convergence_study is true): '" +
+                                      to_string(ConvergenceType::Time) + "' or '" +
+                                      to_string(ConvergenceType::Space) + "'.");
+
+            prm.declare_entry("convergence_csv",
+                              "",
+                              Patterns::Anything(),
+                              "Optional CSV file path where the convergence table will be saved "
+                              "(used only if "
+                              "convergence_study is true). Leave empty to disable CSV output.");
+
             prm.declare_entry("error_file",
                               kDefaultErrorFile,
                               Patterns::Anything(),
@@ -432,20 +529,27 @@ private:
 
     /**
      * @brief Parse parameters from the given input file.
-     * @param prm ParameterHandler object to populate.
      * @param filename Input file name to read parameters from.
      */
-    void parse(ParameterHandler &prm, const std::string &filename) {
+    void parse(const std::string &filename) {
+        // Read the parameter file
         prm.parse_input(filename);
+        // Update the struct members based on the parsed values
+        update();
+    }
 
+    /**
+     * @brief Update the struct members based on the internal ParameterHandler values.
+     */
+    void update() {
         prm.enter_subsection("Problem");
         {
             problem.type = problem_type_from_string(prm.get("type"));
 
             // MMS-based problem entries
-            problem.u0_exact_expr = prm.get("u0_exact_expr");
-            problem.v0_exact_expr = prm.get("v0_exact_expr");
-            problem.f_exact_expr  = prm.get("f_exact_expr");
+            problem.u_exact_expr = prm.get("u_exact_expr");
+            problem.v_exact_expr = prm.get("v_exact_expr");
+            problem.f_exact_expr = prm.get("f_exact_expr");
 
             // Expression-based problem entries
             problem.u0_expr = prm.get("u0_expr");
@@ -484,6 +588,9 @@ private:
         {
             output.output_every         = prm.get_integer("every");
             output.compute_error        = prm.get_bool("compute_error");
+            output.convergence_study    = prm.get_bool("convergence_study");
+            output.convergence_type     = convergence_type_from_string(prm.get("convergence_type"));
+            output.convergence_csv      = prm.get("convergence_csv");
             output.error_history_file   = prm.get("error_file");
             output.vtk_output_directory = prm.get("vtk_directory");
         }
@@ -495,6 +602,26 @@ private:
                   << "compute_error will be disabled (error history only available for MMS)."
                   << std::endl;
             output.compute_error = false;
+        }
+
+        // Validate convergence study option based on problem type
+        if (output.convergence_study && problem.type != ProblemType::MMS) {
+            pcout << "Warning: 'convergence_study' was requested but the problem type is not MMS. "
+                  << "convergence_study will be disabled (convergence study only available for "
+                     "MMS)."
+                  << std::endl;
+            output.convergence_study = false;
+        }
+
+        // If convergence study is enabled, we must have a valid type.
+        // Patterns::Selection should already prevent invalid strings, but keep a clear message.
+        if (output.convergence_study) {
+            if (output.convergence_type != ConvergenceType::Time &&
+                output.convergence_type != ConvergenceType::Space) {
+                throw std::runtime_error(
+                        "Invalid convergence_type while convergence_study is enabled. "
+                        "Expected 'time' or 'space'.");
+            }
         }
 
         // Interactive prompts (only on rank 0 and only if stdin is a TTY).
@@ -530,6 +657,46 @@ private:
                     pcout << "Note: error computation is only available for MMS problems.\n";
                 }
 
+                // Ask about running convergence study
+                if (problem.type == ProblemType::MMS) {
+                    pcout << "Do you want to run a convergence study? (y/n) ["
+                          << (output.convergence_study ? "y" : "n") << "] : ";
+                    std::string ans_conv;
+                    std::getline(std::cin, ans_conv);
+                    if (!ans_conv.empty()) {
+                        if (ans_conv == "y" || ans_conv == "Y" || ans_conv == "1")
+                            output.convergence_study = true;
+                        else
+                            output.convergence_study = false;
+                    }
+
+                    if (output.convergence_study) {
+                        pcout << "Convergence type (time/space) ["
+                              << to_string(output.convergence_type) << "] : ";
+                        std::string conv_type;
+                        std::getline(std::cin, conv_type);
+                        if (!conv_type.empty()) {
+                            // normalize
+                            for (auto &ch: conv_type)
+                                ch = static_cast<char>(::tolower(ch));
+                            output.convergence_type = convergence_type_from_string(conv_type);
+                        }
+
+                        // Ask optional CSV path for convergence table
+                        pcout << "CSV file for convergence table (optional) [press Enter to keep '"
+                              << output.convergence_csv << "'] : ";
+                        std::string conv_csv;
+                        std::getline(std::cin, conv_csv);
+                        if (!conv_csv.empty())
+                            output.convergence_csv = conv_csv;
+                    } else {
+                        // if disabled, keep it empty
+                        output.convergence_csv.clear();
+                    }
+                } else {
+                    pcout << "Note: convergence study is only available for MMS problems.\n";
+                }
+
                 // Ask where to write VTK output directory (allow empty to keep current):
                 pcout << "VTK output directory [press Enter to keep '"
                       << output.vtk_output_directory << "'] : ";
@@ -541,8 +708,17 @@ private:
 
             // Broadcast the (possibly updated) choices to all ranks
             Utilities::MPI::broadcast(MPI_COMM_WORLD, output.compute_error, 0);
+            Utilities::MPI::broadcast(MPI_COMM_WORLD, output.convergence_study, 0);
             Utilities::MPI::broadcast(MPI_COMM_WORLD, output.error_history_file, 0);
             Utilities::MPI::broadcast(MPI_COMM_WORLD, output.vtk_output_directory, 0);
+            Utilities::MPI::broadcast(MPI_COMM_WORLD, output.convergence_csv, 0);
+
+            // convergence_type: broadcast as string to avoid dealing with enum serialization
+            {
+                std::string conv_str = to_string(output.convergence_type);
+                Utilities::MPI::broadcast(MPI_COMM_WORLD, conv_str, 0);
+                output.convergence_type = convergence_type_from_string(conv_str);
+            }
         } catch (std::exception &e) {
             pcout << "Warning: interactive prompts skipped due to exception: " << e.what()
                   << std::endl;
@@ -565,6 +741,13 @@ private:
         // Inform about error history file (if applicable)
         if (output.compute_error) {
             pcout << "Error history will be saved to: " << output.error_history_file << std::endl;
+        }
+
+        if (output.convergence_study) {
+            pcout << "Convergence study enabled. Type: " << output.convergence_type << std::endl;
+            if (!output.convergence_csv.empty())
+                pcout << "Convergence table CSV will be saved to: " << output.convergence_csv
+                      << std::endl;
         }
     }
 };

@@ -19,8 +19,8 @@ from tkinter import ttk, filedialog, messagebox
 DEFAULTS = {
     "Problem": {
         "type": "physical",
-        "u0_exact_expr": "<manufactured_u0_expr>",
-        "v0_exact_expr": "<manufactured_v0_expr>",
+        "u_exact_expr": "<manufactured_u0_expr>",
+        "v_exact_expr": "<manufactured_v0_expr>",
         "f_exact_expr": "<manufactured_f_expr>",
         "u0_expr": "x*(1-x)*y*(1-y)",
         "v0_expr": "0",
@@ -33,7 +33,7 @@ DEFAULTS = {
         "v_expr": "0",
     },
     "Mesh": {
-        "mesh_file": "../mesh/square_structured.geo",
+        "mesh_file": "mesh/square_structured.geo",
         "degree": "1",
     },
     "Time": {
@@ -45,6 +45,9 @@ DEFAULTS = {
     "Output": {
         "every": "1",
         "compute_error": False,
+        "convergence_study": False,
+        "convergence_type": "time",
+        "convergence_csv": "",
         "error_file": "build/error_history.csv",
         "vtk_directory": "build",
     },
@@ -56,13 +59,14 @@ CHOICES = {
     ("Problem", "type"): ["physical", "mms", "expr"],
     ("Boundary condition", "type"): ["zero", "mms", "expr"],
     ("Time", "scheme"): ["theta", "centraldifference", "newmark"],
+    ("Output", "convergence_type"): ["time", "space"],
 }
 
 HELP = {
     # Problem
     ("Problem", "type"): "Choose problem type: 'physical' runs the physical problem; 'mms' uses the manufactured solution (useful for error checks); 'expr' lets you provide expressions for initial/forcing terms.",
-    ("Problem", "u0_exact_expr"): "Exact initial displacement expression (used for MMS). Provide a function of x,y,t matching the manufactured solution at t=0.",
-    ("Problem", "v0_exact_expr"): "Exact initial velocity expression (used for MMS). Provide du_ex/dt at t=0 if using MMS.",
+    ("Problem", "u_exact_expr"): "Exact initial displacement expression (used for MMS). Provide a function of x,y,t matching the manufactured solution at t=0.",
+    ("Problem", "v_exact_expr"): "Exact initial velocity expression (used for MMS). Provide du_ex/dt at t=0 if using MMS.",
     ("Problem", "f_exact_expr"): "Exact forcing term (used for MMS). For MMS tests this is the analytic RHS matching the manufactured solution.",
     ("Problem", "u0_expr"): "Initial displacement expression for 'expr' problems. Use variables x,y,t and math functions (e.g., 'sin(pi*x)').",
     ("Problem", "v0_expr"): "Initial velocity expression for 'expr' problems. Use x,y,t if needed.",
@@ -71,8 +75,8 @@ HELP = {
 
     # Boundary condition
     ("Boundary condition", "type"): "Boundary type: 'zero' imposes homogeneous Dirichlet; 'mms' uses manufactured boundary values; 'expr' uses the provided g_expr and v_expr expressions.",
-    ("Boundary condition", "g_expr"): "Dirichlet boundary expression for displacement u(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured solution (Problem.u0_exact_expr), so no need to set manually.",
-    ("Boundary condition", "v_expr"): "Dirichlet boundary expression for velocity v(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured velocity (Problem.v0_exact_expr), so no need to set manually.",
+    ("Boundary condition", "g_expr"): "Dirichlet boundary expression for displacement u(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured solution (Problem.u_exact_expr), so no need to set manually.",
+    ("Boundary condition", "v_expr"): "Dirichlet boundary expression for velocity v(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured velocity (Problem.v_exact_expr), so no need to set manually.",
 
     # Mesh
     ("Mesh", "mesh_file"): "Path to the mesh file (.geo or .msh). Use the picker to select an existing mesh in the 'mesh' folder.",
@@ -87,6 +91,9 @@ HELP = {
     # Output
     ("Output", "every"): "Write VTK output every N time steps (integer). Set to 1 to write every step.",
     ("Output", "compute_error"): "When true (and problem type is MMS) the code computes and saves the error history to CSV.",
+    ("Output", "convergence_study"): "Enable convergence study (ONLY for MMS). If enabled, you must choose a convergence type (time/space).",
+    ("Output", "convergence_type"): "Convergence study type: 'time' runs dt-refinement studies; 'space' runs mesh-refinement studies. Used only if convergence_study is enabled.",
+    ("Output", "convergence_csv"): "Optional path to a CSV file where the convergence table will be saved. Enabled only when convergence_study is true (and Problem.type is MMS). Leave empty to disable CSV output.",
     ("Output", "error_file"): "Path to the CSV file where the error history will be saved. Enabled only if compute_error is true.",
     ("Output", "vtk_directory"): "Directory where VTK (.vtu/.pvtu) output files will be written. Use the picker to choose an output folder.",
 }
@@ -95,6 +102,7 @@ PATH_FIELDS = {
     ("Mesh", "mesh_file"),
     ("Output", "error_file"),
     ("Output", "vtk_directory"),
+    ("Output", "convergence_csv"),
 }
 
 
@@ -203,6 +211,10 @@ class PrmGUI(tk.Tk):
                                 p = filedialog.askdirectory(title="Select VTK output directory")
                                 if p:
                                     v.set(p)
+                            elif (s, k) == ("Output", "convergence_csv"):
+                                p = filedialog.asksaveasfilename(title="Select convergence CSV file", defaultextension=".csv", filetypes=[("CSV files", ("*.csv", "*.*"))])
+                                if p:
+                                    v.set(p)
                         return _pick
                     pick_btn = ttk.Button(f, text="...", width=3, command=make_picker())
                     pick_btn.grid(row=row, column=2, sticky=tk.W, padx=4)
@@ -227,6 +239,8 @@ class PrmGUI(tk.Tk):
                 if section == "Boundary condition" and key == "type":
                     var.trace_add("write", lambda *a: self.update_widget_states())
                 if section == "Output" and key == "compute_error":
+                    var.trace_add("write", lambda *a: self.update_widget_states())
+                if section == "Output" and key == "convergence_study":
                     var.trace_add("write", lambda *a: self.update_widget_states())
 
                 # add small info button when help text is available
@@ -352,6 +366,8 @@ class PrmGUI(tk.Tk):
         - Problem.type: 'mms' -> enable exact_* fields, disable expr fields; 'expr' -> enable expr fields, disable exact; 'physical' -> disable both groups.
         - Boundary condition.type: 'expr' -> enable g_expr and v_expr; otherwise disable them.
         - Output.compute_error: when false -> disable error_file, when true -> enable.
+        - Output.convergence_study: only enabled when Problem.type == 'mms'; when enabled -> enable convergence_type, else disable.
+        - Output.convergence_csv: only enabled when Problem.type == 'mms' and Output.convergence_study is true.
         """
         # Problem.type rules
         try:
@@ -359,7 +375,7 @@ class PrmGUI(tk.Tk):
         except Exception:
             ptype = "physical"
 
-        exact_keys = ["u0_exact_expr", "v0_exact_expr", "f_exact_expr"]
+        exact_keys = ["u_exact_expr", "v_exact_expr", "f_exact_expr"]
         expr_keys = ["u0_expr", "v0_expr", "f_expr"]
 
         for k in exact_keys:
@@ -412,12 +428,54 @@ class PrmGUI(tk.Tk):
         except Exception:
             pass
 
+        # Output.convergence_study rules
+        try:
+            conv_enabled = self.vars["Output"]["convergence_study"]["var"].get()
+        except Exception:
+            conv_enabled = False
+
+        # convergence_study checkbox itself should only be interactive in MMS mode
+        conv_chk = self.vars["Output"]["convergence_study"]["widget"]
+        try:
+            if ptype == "mms":
+                conv_chk.configure(state="normal")
+            else:
+                conv_chk.configure(state="disabled")
+                # also force it off when not MMS, to avoid saving misleading configs
+                if conv_enabled:
+                    self.vars["Output"]["convergence_study"]["var"].set(False)
+                    conv_enabled = False
+        except Exception:
+            pass
+
+        conv_type_widget = self.vars["Output"]["convergence_type"]["widget"]
+        try:
+            if ptype == "mms" and conv_enabled:
+                conv_type_widget.configure(state="readonly")
+            else:
+                conv_type_widget.configure(state="disabled")
+        except Exception:
+            pass
+
+        # Output.convergence_csv rules
+        try:
+            conv_csv_widget = self.vars["Output"]["convergence_csv"]["widget"]
+            if ptype == "mms" and conv_enabled:
+                conv_csv_widget.configure(state="normal")
+            else:
+                conv_csv_widget.configure(state="disabled")
+                # clear it when disabled to avoid populating it inadvertently
+                if self.vars["Output"]["convergence_csv"]["var"].get():
+                    self.vars["Output"]["convergence_csv"]["var"].set("")
+        except Exception:
+            pass
+
     def validate_before_save(self, params: dict):
         """Return (ok, message). Validate required fields based on rules."""
         # Problem type
         ptype = params.get("Problem", {}).get("type", "physical").strip().lower()
         if ptype == "mms":
-            for k in ("u0_exact_expr", "v0_exact_expr", "f_exact_expr"):
+            for k in ("u_exact_expr", "v_exact_expr", "f_exact_expr"):
                 if not params.get("Problem", {}).get(k):
                     return False, f"Missing required Problem parameter: {k} for MMS type"
         if ptype == "expr":
@@ -434,6 +492,19 @@ class PrmGUI(tk.Tk):
         if params.get("Output", {}).get("compute_error") in (True, "true", "True"):
             if not params.get("Output", {}).get("error_file"):
                 return False, "Missing Output.error_file while compute_error is enabled"
+
+        # convergence study validation
+        conv = params.get("Output", {}).get("convergence_study")
+        if conv in (True, "true", "True"):
+            if ptype != "mms":
+                return False, "Output.convergence_study can only be enabled when Problem.type is 'mms'"
+            ctype = str(params.get("Output", {}).get("convergence_type", "")).strip().lower()
+            if ctype not in ("time", "space"):
+                return False, "Missing/invalid Output.convergence_type (must be 'time' or 'space') when convergence_study is enabled"
+        else:
+            # if convergence is disabled, the csv path must not be set
+            if params.get("Output", {}).get("convergence_csv"):
+                return False, "Output.convergence_csv can only be set when Output.convergence_study is enabled"
 
         return True, ""
 

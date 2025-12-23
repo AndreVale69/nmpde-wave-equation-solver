@@ -46,3 +46,9 @@ build/*
 
 # generated meshes
 *.msh
+
+# python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

@@ -1,4 +1,4 @@
-#include "theta_integrator.hpp"
+#include "time_integrator/theta_integrator.hpp"
 
 #include <deal.II/base/function.h>
 #include <deal.II/lac/affine_constraints.h>
@@ -68,7 +68,7 @@ void ThetaIntegrator::advance(const double                                     t
     rhs.add(-1.0, KU);
 
     // Solve: C_LHS * V^{n+1} = rhs
-    SolverControl solver_control(1000, 1e-8 * rhs.l2_norm());
+    SolverControl solver_control(5000, std::max(1e-12, 1e-8 * rhs.l2_norm()));
     SolverGMRES<TrilinosWrappers::MPI::Vector>::AdditionalData gmres_data;
     // Set maximum number of temporary vectors for GMRES
     gmres_data.max_n_tmp_vectors = 50;
