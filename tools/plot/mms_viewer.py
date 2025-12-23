@@ -1,55 +1,235 @@
+import hashlib
 import io
-
 import json
 import re
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="MMS Plot Viewer", layout="wide")
+try:
+    # When running from repo root
+    from tools.plot.convergence_utils import (
+        compute_observed_orders,
+        detect_kind,
+        load_convergence_csv,
+        pretty_metric_name,
+        summarize_fits,
+    )
+except Exception:  # pragma: no cover
+    # When running from within tools/plot
+    from convergence_utils import (
+        compute_observed_orders,
+        detect_kind,
+        load_convergence_csv,
+        pretty_metric_name,
+        summarize_fits,
+    )
 
-st.title("MMS Plot Viewer")
+
+@dataclass(frozen=True)
+class _CachedUpload:
+    name: str
+    content_hash: str
+    data: bytes
+
+
+def _sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def _ensure_upload_cache():
+    """Initialize session-state caches used to persist uploads across reruns."""
+    st.session_state.setdefault("uploads_mms", {})   # hash -> _CachedUpload
+    st.session_state.setdefault("uploads_conv", {})  # hash -> _CachedUpload
+    st.session_state.setdefault("aliases_conv", {})  # filename -> alias
+
+
+def _ingest_uploads(uploaded_files, *, target: str):
+    """Read uploaded files and persist them in session_state.
+
+    target: 'mms' or 'conv'
+    """
+    if uploaded_files is None:
+        return
+
+    key = "uploads_mms" if target == "mms" else "uploads_conv"
+
+    for f in uploaded_files:
+        try:
+            bs = f.getvalue()
+        except Exception:
+            # Streamlit UploadedFile always supports getvalue, but keep it defensive.
+            bs = f.read()
+
+        h = _sha256_bytes(bs)
+        if h not in st.session_state[key]:
+            st.session_state[key][h] = _CachedUpload(name=f.name, content_hash=h, data=bs)
+
+
+st.set_page_config(page_title="Wave Solver Dashboard", layout="wide")
+
+st.title("Wave Solver Dashboard")
+
+# init persistence
+_ensure_upload_cache()
+
+# ------------------------
+# Sidebar: mode selector (must be early)
+# ------------------------
+st.sidebar.header("Mode")
+mode = st.sidebar.radio(
+    "Viewer",
+    options=["MMS", "Convergence"],
+    index=0,
+    help="Switch between MMS time-series error viewer and convergence study viewer.",
+)
+
+# Global controls for persisted uploads
+with st.sidebar.expander("Uploads (persisted)", expanded=False):
+    st.caption("Uploads are cached in-session so switching mode won't clear them.")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Clear MMS uploads"):
+            st.session_state["uploads_mms"] = {}
+            st.rerun()
+    with col_b:
+        if st.button("Clear Conv uploads"):
+            st.session_state["uploads_conv"] = {}
+            st.rerun()
+
+    st.write(f"MMS cached: {len(st.session_state['uploads_mms'])}")
+    st.write(f"Conv cached: {len(st.session_state['uploads_conv'])}")
+
+
+if mode == "Convergence":
+    st.write(
+        "Upload convergence CSVs produced by the solver (`write_space_convergence_csv` / `write_time_convergence_csv`). "
+        "You'll get log-log plots, fitted observed orders, and per-step order tables."
+    )
+
+    uploaded_conv = st.file_uploader(
+        "Convergence CSVs",
+        type=["csv"],
+        accept_multiple_files=True,
+        key="uploader_conv",
+        help="Space: h,u_L2,u_H1,v_L2,p_*.  Time: dt,u_L2,u_H1,v_L2,q_*.",
+    )
+
+    # Persist new uploads
+    _ingest_uploads(uploaded_conv, target="conv")
+
+    if not st.session_state["uploads_conv"]:
+        st.info("Upload at least one convergence CSV to start.")
+        st.stop()
+
+    # Ensure aliases exist for current uploaded filenames
+    conv_names = [cu.name for cu in st.session_state["uploads_conv"].values()]
+    for n in conv_names:
+        st.session_state["aliases_conv"].setdefault(n, n)
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Convergence file aliases")
+    for n in sorted(conv_names):
+        key = f"alias_conv__{n}"
+        st.session_state["aliases_conv"][n] = st.sidebar.text_input(
+            f"Alias for {n}",
+            value=st.session_state["aliases_conv"].get(n, n),
+            key=key,
+        )
+
+    conv_dfs = []
+    for cu in st.session_state["uploads_conv"].values():
+        try:
+            alias = st.session_state["aliases_conv"].get(cu.name, cu.name)
+            df = load_convergence_csv(io.BytesIO(cu.data), name=alias)
+            kind = detect_kind(df)
+            df = compute_observed_orders(df)
+            df["__kind"] = kind.value
+            conv_dfs.append(df)
+        except Exception as e:
+            st.error(f"Failed loading {cu.name}: {e}")
+
+    if not conv_dfs:
+        st.stop()
+
+    kinds = sorted({df["__kind"].iloc[0] for df in conv_dfs})
+    selected_kind = st.sidebar.selectbox(
+        "Convergence kind",
+        kinds,
+        index=0,
+        help="Space = error vs h, Time = error vs dt",
+    )
+
+    active = [df for df in conv_dfs if df["__kind"].iloc[0] == selected_kind]
+    xcol = "h" if selected_kind == "space" else "dt"
+
+    st.sidebar.markdown("---")
+    metrics = ["u_L2", "u_H1", "v_L2"]
+    selected_metrics = st.sidebar.multiselect("Metrics", metrics, default=metrics)
+
+    st.subheader("Error vs resolution (log-log)")
+    fig = go.Figure()
+    for df in active:
+        # __name is the alias injected above
+        run_name = df.get("__name", pd.Series(["run"])).iloc[0]
+        for m in selected_metrics:
+            if m not in df.columns:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=df[xcol],
+                    y=df[m],
+                    mode="lines+markers",
+                    name=f"{run_name} · {pretty_metric_name(m)}",
+                )
+            )
+
+    fig.update_xaxes(title_text=xcol, type="log")
+    fig.update_yaxes(title_text="error", type="log")
+    fig.update_layout(
+        title=f"{selected_kind.title()} convergence: error vs {xcol}",
+        legend=dict(orientation="h"),
+        height=520,
+        margin=dict(l=40, r=20, t=60, b=50),
+    )
+    st.plotly_chart(fig, width="stretch")
+
+    st.markdown("### Fitted observed order (global fit)")
+    fit_tables = []
+    for df in active:
+        run_name = df.get("__name", pd.Series(["run"])).iloc[0]
+        fits = summarize_fits(df, error_cols=selected_metrics)
+        if fits.empty:
+            continue
+        fits.insert(0, "run", run_name)
+        fits["metric"] = fits["metric"].map(pretty_metric_name)
+        fit_tables.append(fits)
+
+    if fit_tables:
+        st.dataframe(pd.concat(fit_tables, ignore_index=True), width="stretch", hide_index=True)
+
+    st.markdown("### Raw data (with per-step orders)")
+    for df in active:
+        run_name = df.get("__name", pd.Series(["run"])).iloc[0]
+        with st.expander(f"{run_name} ({xcol} rows: {len(df)})", expanded=False):
+            order_cols = (
+                ["p_uL2", "p_uH1", "p_vL2"] if selected_kind == "space" else ["q_uL2", "q_uH1", "q_vL2"]
+            )
+            cols = [xcol] + selected_metrics + [c for c in order_cols if c in df.columns]
+            if "mesh" in df.columns:
+                cols.append("mesh")
+            st.dataframe(df[cols], width="stretch", hide_index=True)
+
+    st.stop()
+
+# MMS mode: existing behavior continues below
 st.write(
     "Upload one or more CSVs (with columns like `time`, `error_u_L2`, `error_u_H1`, etc.) and compare plots."
 )
-
-# Improve sidebar widget visibility while respecting light/dark themes
-st.markdown(
-        """
-        <style>
-        /* Use media queries so we don't force a white sidebar in dark mode. */
-        @media (prefers-color-scheme: dark) {
-            section[data-testid="stSidebar"] div[role="listbox"],
-            section[data-testid="stSidebar"] .stMultiSelect,
-            section[data-testid="stSidebar"] .stSelectbox,
-            section[data-testid="stSidebar"] label {
-                color: #fff !important;
-                background-color: rgba(255,255,255,0.04) !important;
-                border-radius: 4px;
-            }
-        }
-        @media (prefers-color-scheme: light) {
-            section[data-testid="stSidebar"] div[role="listbox"],
-            section[data-testid="stSidebar"] .stMultiSelect,
-            section[data-testid="stSidebar"] .stSelectbox,
-            section[data-testid="stSidebar"] label {
-                color: #000 !important;
-                background-color: rgba(0,0,0,0.03) !important;
-                border-radius: 4px;
-            }
-        }
-        /* Small padding tweak for list items for improved readability */
-        section[data-testid="stSidebar"] .stMultiSelect > div,
-        section[data-testid="stSidebar"] div[role="listbox"] > div {
-            padding: 2px 6px !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-)
-
 
 def _normalize_column_name(c: str) -> str:
     """Best-effort cleanup for messy CSV headers.
@@ -216,24 +396,31 @@ def df_with_index_to_markdown(df, index_name="metric", value_format=None):
 
 
 # allow multiple files
-uploaded = st.file_uploader("Upload CSV(s)", type=["csv"], accept_multiple_files=True)
+uploaded = st.file_uploader(
+    "Upload CSV(s)",
+    type=["csv"],
+    accept_multiple_files=True,
+    key="uploader_mms",
+)
 
-if not uploaded:
+_ingest_uploads(uploaded, target="mms")
+
+if not st.session_state["uploads_mms"]:
     st.info("Upload one or more CSV files to get started.")
     st.stop()
 
-# read uploaded files into dict: name -> DataFrame
+# read cached uploads into dict: name -> DataFrame
 datasets = {}
 read_errors = []
-for f in uploaded:
+for cu in st.session_state["uploads_mms"].values():
     try:
-        df = pd.read_csv(f)
+        df = pd.read_csv(io.BytesIO(cu.data))
         df = _drop_spacer_columns(df)
         df = _ensure_canonical_schema(df)
         df = _coerce_numeric_columns(df)
-        datasets[f.name] = df
+        datasets[cu.name] = df
     except Exception as e:
-        read_errors.append((f.name, str(e)))
+        read_errors.append((cu.name, str(e)))
 
 if read_errors:
     for name, err in read_errors:
@@ -287,7 +474,6 @@ show_inst = st.sidebar.checkbox("Instantaneous errors (log scale)", value=True)
 show_delta = st.sidebar.checkbox("Step-to-step deltas", value=False)
 show_reldelta = st.sidebar.checkbox("Relative step-to-step deltas", value=False)
 show_table = st.sidebar.checkbox("Show comparison table", value=False)
-show_conv = st.sidebar.checkbox("Show convergence (error vs h, log-log)", value=False)
 legend_mode = st.sidebar.selectbox("Legend placement", options=["Outside (compact)", "Inside (default)"], index=0)
 
 # Theming & palettes (Light theme removed)
@@ -445,7 +631,7 @@ if show_table:
         "Comparison table",
         """
 **What this is**  
-A numeric summary of the instantaneous error series for the *selected norm* (L2/H1). It’s useful for quickly comparing runs without visually inspecting every plot.
+A numeric summary of the instantaneous error series for the *selected norm* (L2/H1). It's useful for quickly comparing runs without visually inspecting every plot.
 
 **What it computes (per file and variable)**  
 - min / max / mean / median / stddev  
@@ -459,8 +645,8 @@ It pulls from:
 - `error_u_<NORM>` and/or `error_v_<NORM>`
 
 **Tips / troubleshooting**  
-- If the table is empty, your CSV likely doesn’t contain the chosen norm (e.g. missing `error_u_H1`). Switch **Norm** in the sidebar or check the CSV header.  
-- If you don’t have a `time` column, choose **X axis = step** (we’ll still compute `x_of_*`).
+- If the table is empty, your CSV likely doesn't contain the chosen norm (e.g. missing `error_u_H1`). Switch **Norm** in the sidebar or check the CSV header.  
+- If you don't have a `time` column, choose **X axis = step** (we'll still compute `x_of_*`).
 """,
     )
 
@@ -578,119 +764,6 @@ def safe_image_bytes(fig, fmt="png", scale=2):
         return None, str(e)
 
 
-# ---------- CONVERGENCE: error vs h (log-log) ----------
-def extract_h_from_name(name: str):
-    # try patterns like h=0.01 or _h0.01 or -h0.01
-    m = re.search(r"h=?([0-9.eE+-]+)", name)
-    if m:
-        try:
-            return float(m.group(1))
-        except Exception:
-            return None
-    return None
-
-
-if show_conv:
-    _help_block(
-        "Convergence (error vs h)",
-        """
-**Goal**  
-Estimate the empirical convergence order by fitting a straight line in log–log scale:
-$$
-\\log_{10}(e) \\approx m\,\\log_{10}(h) + c
-$$
-
-The slope `m` is the observed order.
-
-**What you need in the data**  
-- A mesh-size indicator `h`, either as a column named `h` **or** encoded in the filename (patterns like `h=0.01`, `_h0.01`, `-h0.01`).
-- An error column for the chosen norm: `error_u_<NORM>` and/or `error_v_<NORM>`.
-
-**What the plot shows**  
-- Marker points: `(h, error)` extracted from each selected file (uses the *last* available error sample).  
-- A fitted line (least squares on log10) plus the slope in the legend.
-
-**Interpretation tips**  
-- Make sure you’re in the asymptotic regime (enough refinement).  
-- If errors are ~0 or negative (can happen with bad parsing), those points are dropped.
-
-**Troubleshooting**  
-- "Not enough data..." usually means fewer than 2 valid `(h, error)` points. Add more refinement levels or provide `h`.
-""",
-    )
-
-    # gather (h, error) for selected datasets
-    hu = []
-    eu = []
-    hv = []
-    ev = []
-    for name in selected:
-        df = datasets[name]
-        hval = None
-        if "h" in df.columns:
-            try:
-                hval = float(df["h"].dropna().iloc[-1])
-            except Exception:
-                hval = None
-        if hval is None:
-            hval = extract_h_from_name(name)
-        if hval is None:
-            continue
-
-        cu = _col("error", "u", metric_norm)
-        cv = _col("error", "v", metric_norm)
-        if cu in df.columns:
-            try:
-                err = float(df[cu].dropna().iloc[-1])
-                hu.append(hval)
-                eu.append(err)
-            except Exception:
-                pass
-        if cv in df.columns:
-            try:
-                err = float(df[cv].dropna().iloc[-1])
-                hv.append(hval)
-                ev.append(err)
-            except Exception:
-                pass
-
-    conv_fig = go.Figure()
-
-    def add_loglog_series(hs, es, label):
-        if len(hs) < 2:
-            return None
-        hs = np.array(hs)
-        es = np.array(es)
-        mask = (hs > 0) & (es > 0)
-        if mask.sum() < 2:
-            return None
-        hs = hs[mask]
-        es = es[mask]
-        m, c = np.polyfit(np.log10(hs), np.log10(es), 1)
-        hsort = np.sort(hs)
-        fit = 10 ** (m * np.log10(hsort) + c)
-        conv_fig.add_trace(go.Scatter(x=hs, y=es, mode="markers", name=f"{label} points"))
-        conv_fig.add_trace(go.Scatter(x=hsort, y=fit, mode="lines", name=f"{label} fit (slope={m:.2f})"))
-        return m
-
-    slope_u = add_loglog_series(hu, eu, f"u ({metric_norm})")
-    slope_v = add_loglog_series(hv, ev, f"v ({metric_norm})")
-    if slope_u is None and slope_v is None:
-        st.warning(
-            "Not enough data with 'h' and matching error columns to compute convergence slopes. "
-            "Provide an 'h' column or include h in filenames."
-        )
-    else:
-        conv_fig.update_xaxes(title_text="h", type="log")
-        conv_fig.update_yaxes(title_text=f"Error ({metric_norm})", type="log")
-        st.subheader("Convergence: error vs h (log-log)")
-        st.plotly_chart(conv_fig, use_container_width=True)
-        if slope_u is not None:
-            st.write(f"Estimated slope for u ({metric_norm}): {slope_u:.3f}")
-        if slope_v is not None:
-            st.write(f"Estimated slope for v ({metric_norm}): {slope_v:.3f}")
-
-
 # ---------- FIG 1: instantaneous errors (interactive) ----------
 if show_inst:
     st.subheader("Instantaneous MMS error - comparison (interactive)")
@@ -714,8 +787,8 @@ The per-time-step error of your numerical solution against the manufactured solu
 - Sudden spikes can indicate CFL/time-step issues, solver divergence, or boundary/forcing discontinuities.
 
 **Common gotchas**  
-- If you don’t see H1: your CSV must contain `error_u_H1`/`error_v_H1`. The sidebar will hide `H1` if it isn’t detected.
-- If only `u` appears: the file likely doesn’t contain the corresponding `v` column.
+- If you don't see H1: your CSV must contain `error_u_H1`/`error_v_H1`. The sidebar will hide `H1` if it isn't detected.
+- If only `u` appears: the file likely doesn't contain the corresponding `v` column.
 """,
     )
 
@@ -789,7 +862,7 @@ $$
 \\Delta e_n = e_n - e_{{n-1}}
 $$
 
-(Some codes store an absolute value; this viewer simply plots what’s in the CSV.)
+(Some codes store an absolute value; this viewer simply plots what's in the CSV.)
 
 **Columns used (chosen Norm = `{metric_norm}`)**  
 - `delta_u_{metric_norm}`, `delta_v_{metric_norm}`
@@ -799,7 +872,7 @@ $$
 - Large magnitude excursions mean a sudden change in error (often aligned with sharp forcing, reflections, or a too-large dt).
 
 **Troubleshooting**  
-- If you don’t see lines, that usually means the column isn’t present (e.g. your CSV has only `delta_*_L2`). Switch Norm or regenerate the CSV.
+- If you don't see lines, that usually means the column isn't present (e.g. your CSV has only `delta_*_L2`). Switch Norm or regenerate the CSV.
 """,
     )
 
@@ -865,7 +938,7 @@ This is a dimensionless "percent-like" change indicator.
 - Large spikes: abrupt transitions or times where the denominator is small.
 
 **Important gotcha**  
-- If the previous error is ~0, the relative delta can blow up or become undefined. Your CSV generator may clamp/skip; the viewer will just plot what’s provided.
+- If the previous error is ~0, the relative delta can blow up or become undefined. Your CSV generator may clamp/skip; the viewer will just plot what's provided.
 """,
     )
 
