@@ -1,4 +1,4 @@
-#include "mesh_generator.hpp"
+#include "utils/mesh_generator.hpp"
 
 #include <cstdlib>
 #include <cstring>

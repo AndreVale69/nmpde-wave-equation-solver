@@ -93,10 +93,10 @@ message(STATUS)
 # Add the executable target.
 add_executable(
         nm4pde
+        src/time_integrator/theta_integrator.cpp
+        src/utils/mesh_generator.cpp
         src/main.cpp
         src/Wave.cpp
-        src/mesh_generator.cpp
-        src/theta_integrator.cpp
 )
 
 target_include_directories(nm4pde PRIVATE ${CMAKE_SOURCE_DIR}/include)

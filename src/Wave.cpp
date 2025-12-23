@@ -1,10 +1,9 @@
 #include "Wave.hpp"
 
-#include "mesh_generator.hpp"
-
-#include "progress_bar.hpp"
-#include "theta_integrator.hpp"
-#include "time_integrator.hpp"
+#include "time_integrator/theta_integrator.hpp"
+#include "time_integrator/time_integrator.hpp"
+#include "utils/mesh_generator.hpp"
+#include "utils/progress_bar.hpp"
 
 #include <algorithm>
 #include <boost/uuid/uuid.hpp>

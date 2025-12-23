@@ -1,4 +1,4 @@
-#include "theta_integrator.hpp"
+#include "time_integrator/theta_integrator.hpp"
 
 #include <deal.II/base/function.h>
 #include <deal.II/lac/affine_constraints.h>

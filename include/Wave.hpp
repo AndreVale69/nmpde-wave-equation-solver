@@ -36,11 +36,11 @@
 #include <utility>
 #include <vector>
 
-#include "conditional_o_stream_wrapper.hpp"
 #include "enum/time_scheme.hpp"
-#include "mms_functions.hpp"
+#include "functions/mms_functions.hpp"
 #include "parameters.hpp"
-#include "time_integrator.hpp"
+#include "time_integrator/time_integrator.hpp"
+#include "utils/conditional_o_stream_wrapper.hpp"
 
 using namespace dealii;
 

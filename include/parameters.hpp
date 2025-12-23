@@ -12,7 +12,8 @@
 #include "enum/convergence_type.hpp"
 #include "enum/problem_type.hpp"
 #include "enum/time_scheme.hpp"
-#include "problem_functions.hpp"
+#include "functions/problem_functions.hpp"
+#include "utils/conditional_o_stream_wrapper.hpp"
 
 /**
  * @brief Structure to hold simulation parameters.
