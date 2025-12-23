@@ -416,6 +416,14 @@ void Wave::solve() {
 
         solution_owned.compress(VectorOperation::insert);
 
+        // Enforce v=0 on boundary as well (consistent with Dirichlet conditions)
+        for (const auto &it : boundary_values_zero)
+            if (velocity_owned.locally_owned_elements().is_element(it.first))
+                velocity_owned[it.first] = it.second;
+
+        velocity_owned.compress(VectorOperation::insert);
+
+
         // 3. Update ghosted vectors for output
         solution = solution_owned;
         solution.update_ghost_values();
@@ -424,29 +432,24 @@ void Wave::solve() {
         velocity.update_ghost_values();
 
         // -------------------- Dissipation study (optional) --------------------
-        if (parameters.enable_dissipation_study && (time_step+1 % parameters.dissipation_every == 0))
+        if (parameters.enable_dissipation_study && ((time_step + 1) % parameters.dissipation_every == 0))
         {
             const double E = compute_energy(solution_owned, velocity_owned);
             if (mpi_rank == 0)
             {
-                dissipation_out << (time_step+1) << "," << time << "," << E << "," << (E / E0) << "\n";
+                dissipation_out << (time_step+1) << "," << t_np1 << "," << E << "," << (E / E0) << "\n";
                 dissipation_out.flush();
             }
         }
 
         // -------------------- Modal study (optional) --------------------
-        if (parameters.enable_modal_study &&
-            time_step > 0 &&
-            (time_step % parameters.modal_every == 0))
+        if (parameters.enable_modal_study && ((time_step + 1) % parameters.modal_every == 0))
         {
             const double a    = (solution_owned * Mphi_owned) / phi_M_phi;
             const double adot = (velocity_owned * Mphi_owned) / phi_M_phi;
 
             if (mpi_rank == 0)
-            {
-                modal_out << time_step << "," << time << "," << a << "," << adot << "\n";
-                modal_out.flush();
-            }
+                modal_out << (time_step+1) << "," << t_np1 << "," << a << "," << adot << "\n";
         }
 
         time = t_np1;

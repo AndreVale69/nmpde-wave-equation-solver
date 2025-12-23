@@ -1,13 +1,13 @@
 subsection Study
   set enable_dissipation = true
   set dissipation_every = 1
-  set dissipation_csv = dissipation.csv
+  set dissipation_csv = diss_T_P1_dt0p01_th1p0_M11.csv
 
-    set enable_modal = true
-    set modal_every = 1
-    set modal_csv = modal.csv
-    set modal_k = 1
-    set modal_l = 1
+  set enable_modal = true
+  set modal_every = 1
+  set modal_csv = modal_T_P1_dt0p01_th1p0_M11.csv
+  set modal_k = 1
+  set modal_l = 1
 end
 
 subsection Mesh
@@ -16,12 +16,12 @@ subsection Mesh
 end
 
 subsection Time
-  set T      = 1.0
+  set T      = 5.0
   set dt     = 0.01
   set theta  = 1.0
   set scheme = theta
 end
 
 subsection Output
-  set every = 1
+  set every = 50
 end
