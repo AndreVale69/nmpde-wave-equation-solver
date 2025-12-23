@@ -175,11 +175,11 @@ struct Parameters {
      */
     explicit Parameters(const std::string &filename)
         : mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
-        , pcout(std::cout, mpi_rank == 0) {
+        , pcout(std::cout, mpi_rank == 0)
+        , prm(ParameterHandler()) {
         pcout << "Reading parameters from file: " << filename << std::endl;
-        ParameterHandler prm;
-        declare(prm);
-        parse(prm, filename);
+        declare();
+        parse(filename);
     }
 
     /**
@@ -197,7 +197,7 @@ struct Parameters {
                             std::unique_ptr<Function<dim>> &boundary_v,
                             FunctionParser<dim>            &forcing_term,
                             FunctionParser<dim>            &u_0,
-                            FunctionParser<dim>            &v_0) {
+                            FunctionParser<dim>            &v_0) const {
         const std::string                   vars      = "x,y,t";
         const std::map<std::string, double> constants = {
                 {"pi", numbers::PI}, {"PI", numbers::PI}, {"Pi", numbers::PI}};
@@ -277,6 +277,44 @@ struct Parameters {
         }
     }
 
+    /**
+     * @brief Write the current parameter values back to a deal.II-style .prm file.
+     *
+     * This implementation uses deal.II's ParameterHandler printing facilities.
+     * It first syncs the internal ParameterHandler (`prm`) with the current struct values,
+     * then prints the full parameter tree.
+     *
+     * @param filepath Path to the output .prm file.
+     */
+    void write_back_to_file(const std::string &filepath) {
+        const std::filesystem::path out_path(filepath);
+        try {
+            if (out_path.has_parent_path()) {
+                std::filesystem::create_directories(out_path.parent_path());
+            }
+        } catch (const std::exception &e) {
+            pcout << "Warning: could not create directory for prm output '" << filepath
+                  << "': " << e.what() << std::endl;
+        }
+
+        // Sync current values into the internal ParameterHandler.
+        // The ParameterHandler already has all entries declared in the constructor.
+        update();
+
+        std::ofstream out(filepath);
+        if (!out) {
+            throw std::runtime_error("Cannot open prm output file for writing: " + filepath);
+        }
+
+        prm.print_parameters(out, ParameterHandler::OutputStyle::PRM);
+        out.flush();
+        if (!out) {
+            throw std::runtime_error("Failed while writing prm output file: " + filepath);
+        }
+
+        pcout << "Wrote parameters to: " << filepath << std::endl;
+    }
+
 private:
     /**
      * @brief This MPI process.
@@ -287,6 +325,11 @@ private:
      * @brief Parallel output stream.
      */
     ConditionalOStreamWrapper pcout;
+
+    /**
+     * @brief Internal ParameterHandler instance.
+     */
+    ParameterHandler prm;
 
     /**
      * @brief Default mesh file path.
@@ -341,9 +384,8 @@ private:
 
     /**
      * @brief Declare parameters in the given ParameterHandler.
-     * @param prm ParameterHandler object to declare parameters in.
      */
-    static void declare(ParameterHandler &prm) {
+    void declare() {
         prm.enter_subsection("Problem");
         {
             prm.declare_entry(
@@ -486,12 +528,19 @@ private:
 
     /**
      * @brief Parse parameters from the given input file.
-     * @param prm ParameterHandler object to populate.
      * @param filename Input file name to read parameters from.
      */
-    void parse(ParameterHandler &prm, const std::string &filename) {
+    void parse(const std::string &filename) {
+        // Read the parameter file
         prm.parse_input(filename);
+        // Update the struct members based on the parsed values
+        update();
+    }
 
+    /**
+     * @brief Update the struct members based on the internal ParameterHandler values.
+     */
+    void update() {
         prm.enter_subsection("Problem");
         {
             problem.type = problem_type_from_string(prm.get("type"));

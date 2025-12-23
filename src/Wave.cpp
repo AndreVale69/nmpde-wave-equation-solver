@@ -1,68 +1,25 @@
 #include "Wave.hpp"
 
+#include "mesh_generator.hpp"
+
 #include "progress_bar.hpp"
 #include "theta_integrator.hpp"
 #include "time_integrator.hpp"
 
 #include <algorithm>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <cmath>
+#include <deal.II/base/convergence_table.h>
+#include <deal.II/base/utilities.h>
 #include <deal.II/fe/mapping_fe.h>
 #include <fstream>
 #include <iomanip>
 #include <numeric>
+#include <regex>
 #include <sstream>
 #include <string>
-
-void Wave::process_mesh_input() {
-    try {
-        const std::filesystem::path p(mesh_file_name);
-        if (!p.has_extension()) {
-            AssertThrow(false,
-                        ExcMessage("Mesh file name must have an extension (.msh or .geo): " +
-                                   mesh_file_name));
-        }
-        if (p.extension() == ".geo") {
-            pcout << "-----------------------------------------------" << std::endl;
-            pcout << "Generating mesh from .geo file using gmsh..." << std::endl;
-            // Output mesh file: same name but .msh extension
-            std::filesystem::path out = p;
-            out.replace_extension(".msh");
-
-            // Build gmsh command (force MSH 2.2 for deal.II compatibility)
-            const std::string cmd = "gmsh -2 "
-                                    "-format msh2 "
-                                    "-setnumber Mesh.MshFileVersion 2.2 "
-                                    "-o \"" +
-                                    out.string() + "\" \"" + p.string() + "\"";
-
-            if (mpi_rank == 0) {
-                pcout << "  Running command: " << cmd << std::endl;
-                const int ret = std::system(cmd.c_str());
-                AssertThrow(ret == 0,
-                            ExcMessage("Failed to run gmsh to generate mesh from .geo file: " +
-                                       mesh_file_name + ". Command executed: " + cmd +
-                                       ". If gmsh is not installed, please install it or provide a "
-                                       "mesh file in .msh format."));
-            }
-            // Make sure ALL ranks wait until the file is completely written
-            MPI_Barrier(MPI_COMM_WORLD);
-
-            // Replace the mesh file name with the generated mesh file
-            mesh_file_name = out.string();
-            pcout << "  Mesh generated: " << mesh_file_name << std::endl;
-            pcout << "-----------------------------------------------" << std::endl;
-        } else if (p.extension() == ".msh") {
-            // Nothing to do
-        } else {
-            AssertThrow(false,
-                        ExcMessage("Unsupported mesh file extension (use .msh or .geo): " +
-                                   mesh_file_name));
-        }
-    } catch (const std::exception &e) {
-        AssertThrow(false,
-                    ExcMessage(std::string("Exception while processing mesh input: ") + e.what()));
-    }
-}
 
 void Wave::setup() {
     pcout << "===============================================" << std::endl;
@@ -70,7 +27,7 @@ void Wave::setup() {
     // Set up the problem.
     {
         pcout << "Setting up the problem" << std::endl;
-        parameters.initialize_problem(mu, boundary_g, boundary_v, forcing_term, u_0, v_0);
+        parameters->initialize_problem(mu, boundary_g, boundary_v, forcing_term, u_0, v_0);
     }
 
     // Create the mesh.
@@ -173,6 +130,14 @@ void Wave::setup() {
         default:
             AssertThrow(false, ExcMessage("Unknown time scheme"));
     }
+}
+
+void Wave::solve() {
+    // If convergence study is requested, run it instead of normal solve.
+    if (parameters->output.convergence_study) {
+        return convergence();
+    }
+    do_solve();
 }
 
 void Wave::assemble_matrices() {
@@ -296,7 +261,6 @@ void Wave::make_velocity_dirichlet_constraints(const double               time,
     constraints.close();
 }
 
-
 void Wave::output(const unsigned int &time_step) const {
     DataOut<dim> data_out;
     data_out.add_data_vector(dof_handler, solution, "u");
@@ -310,15 +274,250 @@ void Wave::output(const unsigned int &time_step) const {
     data_out.build_patches();
 
     // Use the vtk output directory from parameters (ensure trailing slash)
-    std::string vtk_dir = parameters.output.vtk_output_directory;
+    std::string vtk_dir = parameters->output.vtk_output_directory;
     if (!vtk_dir.empty() && vtk_dir.back() != '/')
         vtk_dir.push_back('/');
 
     data_out.write_vtu_with_pvtu_record(vtk_dir, "output", time_step, MPI_COMM_WORLD, 3);
 }
 
+void Wave::do_solve() {
+    assemble_matrices();
+
+    pcout << "===============================================" << std::endl;
+
+    // Initialize the time integrator.
+    {
+        pcout << "Initializing the time integrator" << std::endl;
+        time_integrator->initialize(
+                mass_matrix, stiffness_matrix, solution_owned, velocity_owned, deltat);
+    }
+
+    // Apply the initial conditions.
+    {
+        pcout << "Applying the initial conditions" << std::endl;
+
+        // Set time to 0 for initial conditions
+        u_0.set_time(0.0);
+        v_0.set_time(0.0);
+
+        // U^0
+        VectorTools::interpolate(dof_handler, u_0, solution_owned);
+        solution = solution_owned;
+
+        // Apply Dirichlet constraints to initial displacement
+        AffineConstraints<> constraints_u0;
+        make_dirichlet_constraints(0.0, constraints_u0);
+        constraints_u0.distribute(solution_owned);
+
+        // V^0
+        VectorTools::interpolate(dof_handler, v_0, velocity_owned);
+        velocity = velocity_owned;
+
+        // Apply Dirichlet constraints to initial velocity
+        AffineConstraints<> constraints_v0;
+        make_velocity_dirichlet_constraints(0.0, constraints_v0);
+        constraints_v0.distribute(velocity_owned);
+
+        // Output the initial solution (time step 0)
+        output(0);
+        pcout << "-----------------------------------------------" << std::endl;
+    }
+
+    ProgressBar progress(static_cast<unsigned int>(std::ceil(T / deltat)), MPI_COMM_WORLD, &pcout);
+    progress.for_while(
+            [&](const unsigned int step) -> bool {
+                // step is 1-based: t_n = (step-1)*deltat, t_np1 = step*deltat
+                const double t_n   = (static_cast<double>(step) - 1.0) * deltat;
+                const double t_np1 = static_cast<double>(step) * deltat;
+
+                // 1. Assemble the right-hand side at time step n
+                assemble_rhs(t_n, forcing_n); // F^n
+                assemble_rhs(t_np1, forcing_np1); // F^{n+1}
+
+                // 2. Create Dirichlet constraints at time step n+1
+                AffineConstraints<> constraints_u_np1;
+                AffineConstraints<> constraints_v_np1;
+                make_dirichlet_constraints(t_np1, constraints_u_np1);
+                make_velocity_dirichlet_constraints(t_np1, constraints_v_np1);
+
+                // 3. Build Dirichlet values map for velocity at time step n+1
+                std::map<types::global_dof_index, double> v_boundary_values;
+                boundary_v->set_time(t_np1);
+                for (const auto id: boundary_ids)
+                    VectorTools::interpolate_boundary_values(
+                            dof_handler, id, *boundary_v, v_boundary_values);
+
+                // 4. Advance the solution to time step n+1
+                time_integrator->advance(t_n,
+                                         deltat,
+                                         mass_matrix,
+                                         stiffness_matrix,
+                                         forcing_n,
+                                         forcing_np1,
+                                         constraints_v_np1,
+                                         v_boundary_values,
+                                         solution_owned,
+                                         velocity_owned);
+
+                // 5. Apply Dirichlet constraints to the solution and velocity at time step n+1
+                constraints_u_np1.distribute(solution_owned);
+                constraints_v_np1.distribute(velocity_owned);
+
+
+                // 6. Update the solution and velocity vectors with ghost values
+                solution = solution_owned;
+                velocity = velocity_owned;
+                solution.update_ghost_values();
+                velocity.update_ghost_values();
+
+                // 6. Compute errors if exact solution is available: store them for later summary
+                if (parameters->problem.type == ProblemType::MMS) {
+                    const auto [u_L2, u_H1, v_L2] = compute_error_norms(t_np1);
+                    if (mpi_rank == 0) {
+                        time_history.push_back(t_np1);
+                        error_u_L2_history.push_back(u_L2);
+                        error_u_H1_history.push_back(u_H1);
+                        error_v_L2_history.push_back(v_L2);
+                    }
+                }
+
+                if (step % output_every == 0) {
+                    output(step);
+                }
+
+                return t_np1 < T;
+            },
+            "Time-stepping progress",
+            [&](const unsigned int step) -> std::string {
+                std::ostringstream oss;
+                const double       t_show = static_cast<double>(step) * deltat; // end of this step
+                oss << "t=" << std::fixed << std::setprecision(5) << t_show;
+                return oss.str();
+            });
+
+    // After time-stepping, print an extended error summary if using MMS (only on rank 0)
+    if (parameters->problem.type == ProblemType::MMS && mpi_rank == 0) {
+        print_error_summary();
+    }
+}
+
+
+void Wave::convergence() {
+    using dealii::ConvergenceTable;
+
+    AssertThrow(parameters->problem.type == ProblemType::MMS,
+                ExcMessage("Convergence study requires MMS (exact solution)."));
+
+    if (parameters->output.convergence_type == ConvergenceType::Time) {
+        pcout << "Running time convergence study..." << std::endl;
+        const auto rows = run_time_convergence(parameters_file, {0.2, 0.1, 0.05, 0.025});
+
+        ConvergenceTable table;
+
+        for (const auto &row: rows) {
+            table.add_value("dt", row.dt);
+            table.add_value("u_L2", row.err.u_L2);
+            table.add_value("u_H1", row.err.u_H1);
+            table.add_value("v_L2", row.err.v_L2);
+
+            // Also store the observed orders computed in run_time_convergence().
+            // First row has NaN (no previous row), which will be printed as-is.
+            table.add_value("q_uL2", row.q_uL2);
+            table.add_value("q_uH1", row.q_uH1);
+            table.add_value("q_vL2", row.q_vL2);
+        }
+
+        // dt halves -> use reduction_rate_log2 (same as prof)
+        table.evaluate_convergence_rates("u_L2", ConvergenceTable::reduction_rate_log2);
+        table.evaluate_convergence_rates("u_H1", ConvergenceTable::reduction_rate_log2);
+        table.evaluate_convergence_rates("v_L2", ConvergenceTable::reduction_rate_log2);
+
+        // Formatting
+        table.set_precision("dt", 6);
+        table.set_scientific("u_L2", true);
+        table.set_scientific("u_H1", true);
+        table.set_scientific("v_L2", true);
+
+        table.set_precision("q_uL2", 6);
+        table.set_precision("q_uH1", 6);
+        table.set_precision("q_vL2", 6);
+
+        if (mpi_rank == 0) {
+            table.write_text(std::cout);
+            if (!parameters->output.convergence_csv.empty()) {
+                write_time_convergence_csv(parameters->output.convergence_csv, rows);
+            }
+        }
+
+        return;
+    }
+    if (parameters->output.convergence_type == ConvergenceType::Space) {
+        pcout << "Running space convergence study..." << std::endl;
+
+        // const auto rows = run_space_convergence(parameters_file,
+        //                                         {
+        //                                                 {"mesh/square_structured.geo", 1.0
+        //                                                 / 10.0},
+        //                                                 {"mesh/square_structured.geo", 1.0
+        //                                                 / 20.0},
+        //                                                 {"mesh/square_structured.geo", 1.0
+        //                                                 / 40.0},
+        //                                                 {"mesh/square_structured.geo", 1.0
+        //                                                 / 80.0},
+        //                                         },
+        //                                         /*dt_small=*/1e-3);
+        const auto rows =
+                run_space_convergence(parameters_file,
+                                      {
+                                              {"mesh/square_structured.geo", 1.0 / 10.0},
+                                              {"mesh/square_structured.geo", 1.0 / 20.0},
+                                              // {"mesh/square_structured.geo", 1.0 / 40.0},
+                                              // {"mesh/square_structured.geo", 1.0 / 80.0},
+                                      },
+                                      /*dt_small=*/1e-3);
+
+        ConvergenceTable table;
+
+        for (const auto &row: rows) {
+            table.add_value("h", row.h);
+            table.add_value("u_L2", row.err.u_L2);
+            table.add_value("u_H1", row.err.u_H1);
+            table.add_value("v_L2", row.err.v_L2);
+
+            table.add_value("p_uL2", row.p_uL2);
+            table.add_value("p_uH1", row.p_uH1);
+            table.add_value("p_vL2", row.p_vL2);
+        }
+
+        table.evaluate_convergence_rates("u_L2", ConvergenceTable::reduction_rate_log2);
+        table.evaluate_convergence_rates("u_H1", ConvergenceTable::reduction_rate_log2);
+        table.evaluate_convergence_rates("v_L2", ConvergenceTable::reduction_rate_log2);
+
+        table.set_precision("h", 6);
+        table.set_scientific("u_L2", true);
+        table.set_scientific("u_H1", true);
+        table.set_scientific("v_L2", true);
+
+        table.set_precision("p_uL2", 6);
+        table.set_precision("p_uH1", 6);
+        table.set_precision("p_vL2", 6);
+
+        if (mpi_rank == 0) {
+            table.write_text(std::cout);
+            if (!parameters->output.convergence_csv.empty()) {
+                write_space_convergence_csv(parameters->output.convergence_csv, rows);
+            }
+        }
+
+        return;
+    }
+
+    AssertThrow(false, ExcMessage("Unknown convergence type"));
+}
+
 Wave::ErrorNorms Wave::compute_error_norms(const double time) {
-    AssertThrow(parameters.problem.type == ProblemType::MMS,
+    AssertThrow(parameters->problem.type == ProblemType::MMS,
                 ExcMessage("compute_error_norms() is intended for MMS verification."));
     // Exact solutions
     const auto exact_solution_u = &u_0;
@@ -521,9 +720,9 @@ void Wave::print_error_summary() const {
     pcout << "-----------------------------------------------" << std::endl;
 
     // Save the extended error history to CSV if requested in parameters (only rank 0 writes)
-    if (parameters.output.compute_error) {
+    if (parameters->output.compute_error) {
         if (mpi_rank == 0) {
-            const std::filesystem::path outpath(parameters.output.error_history_file);
+            const std::filesystem::path outpath(parameters->output.error_history_file);
             try {
                 if (outpath.has_parent_path()) {
                     std::filesystem::create_directories(outpath.parent_path());
@@ -607,132 +806,371 @@ void Wave::print_error_summary() const {
                 pcout << "Exception while trying to write error history to '" << outpath.string()
                       << "': " << e.what() << std::endl;
             }
+        } else {
+            pcout << "Error history saving disabled by parameter 'compute_error'." << std::endl;
         }
-    } else {
-        pcout << "Error history saving disabled by parameter 'compute_error'." << std::endl;
-    }
 
-    pcout << "===============================================" << std::endl;
+        pcout << "===============================================" << std::endl;
+    }
 }
 
+double Wave::estimate_order(const double e1, const double e2, const double h1, const double h2) {
+    return std::log(e1 / e2) / std::log(h1 / h2);
+}
 
-void Wave::solve() {
-    assemble_matrices();
+std::vector<Wave::TimeConvRow> Wave::run_time_convergence(const std::string         &prm_base,
+                                                          const std::vector<double> &dts) {
+    std::vector<TimeConvRow> rows;
+    rows.reserve(dts.size());
 
-    pcout << "===============================================" << std::endl;
+    for (const double dt: dts) {
+        auto prm                      = std::make_shared<Parameters<dim>>(prm_base);
+        prm->time.dt                  = dt;
+        prm->output.output_every      = 999999; // disable output during convergence tests
+        prm->output.compute_error     = true; // enable error computation
+        prm->output.convergence_study = false; // disable extra convergence output
 
-    // Initialize the time integrator.
-    {
-        pcout << "Initializing the time integrator" << std::endl;
-        time_integrator->initialize(
-                mass_matrix, stiffness_matrix, solution_owned, velocity_owned, deltat);
+        Wave w(prm);
+        w.setup();
+        const ErrorNorms e = w.solve_and_get_final_errors();
+
+        rows.push_back({dt, e});
     }
 
-    // Apply the initial conditions.
-    {
-        pcout << "Applying the initial conditions" << std::endl;
+    MPI_Barrier(MPI_COMM_WORLD);
 
-        // Set time to 0 for initial conditions
-        u_0.set_time(0.0);
-        v_0.set_time(0.0);
+    for (size_t i = 1; i < rows.size(); ++i) {
+        rows[i].q_uL2 =
+                estimate_order(rows[i - 1].err.u_L2, rows[i].err.u_L2, rows[i - 1].dt, rows[i].dt);
+        rows[i].q_uH1 =
+                estimate_order(rows[i - 1].err.u_H1, rows[i].err.u_H1, rows[i - 1].dt, rows[i].dt);
+        rows[i].q_vL2 =
+                estimate_order(rows[i - 1].err.v_L2, rows[i].err.v_L2, rows[i - 1].dt, rows[i].dt);
+    }
+    return rows;
+}
 
-        // U^0
-        VectorTools::interpolate(dof_handler, u_0, solution_owned);
-        solution = solution_owned;
+void Wave::write_time_convergence_csv(const std::string              &filename,
+                                      const std::vector<TimeConvRow> &rows) const {
+    if (mpi_rank != 0)
+        return;
 
-        // Apply Dirichlet constraints to initial displacement
-        AffineConstraints<> constraints_u0;
-        make_dirichlet_constraints(0.0, constraints_u0);
-        constraints_u0.distribute(solution_owned);
+    std::ofstream csv(filename);
+    AssertThrow(csv, ExcMessage("Could not open CSV file: " + filename));
 
-        // V^0
-        VectorTools::interpolate(dof_handler, v_0, velocity_owned);
-        velocity = velocity_owned;
+    // Header
+    csv << "dt,u_L2,u_H1,v_L2,q_uL2,q_uH1,q_vL2\n";
 
-        // Apply Dirichlet constraints to initial velocity
-        AffineConstraints<> constraints_v0;
-        make_velocity_dirichlet_constraints(0.0, constraints_v0);
-        constraints_v0.distribute(velocity_owned);
+    auto write_double = [&](double v) {
+        if (std::isnan(v))
+            csv << "nan";
+        else
+            csv << std::scientific << std::setprecision(10) << v;
+    };
 
-        // Output the initial solution (time step 0)
-        output(0);
-        pcout << "-----------------------------------------------" << std::endl;
+    for (const auto &[dt, err, q_uL2, q_uH1, q_vL2]: rows) {
+        // dt
+        csv << std::fixed << std::setprecision(6) << dt << ",";
+
+        // errors
+        write_double(err.u_L2);
+        csv << ",";
+        write_double(err.u_H1);
+        csv << ",";
+        write_double(err.v_L2);
+        csv << ",";
+
+        // observed orders (computed in run_time_convergence)
+        write_double(q_uL2);
+        csv << ",";
+        write_double(q_uH1);
+        csv << ",";
+        write_double(q_vL2);
+
+        csv << "\n";
     }
 
-    ProgressBar progress(static_cast<unsigned int>(std::ceil(T / deltat)), MPI_COMM_WORLD, &pcout);
-    progress.for_while(
-            [&](const unsigned int step) -> bool {
-                // step is 1-based: t_n = (step-1)*deltat, t_np1 = step*deltat
-                const double t_n   = (static_cast<double>(step) - 1.0) * deltat;
-                const double t_np1 = static_cast<double>(step) * deltat;
+    csv.close();
+}
 
-                // 1. Assemble the right-hand side at time step n
-                assemble_rhs(t_n, forcing_n); // F^n
-                assemble_rhs(t_np1, forcing_np1); // F^{n+1}
+std::vector<Wave::SpaceConvRow>
+Wave::run_space_convergence(const std::string                                 &prm_base,
+                            const std::vector<std::pair<std::string, double>> &meshes,
+                            const double                                       dt_small) const {
+    std::vector<SpaceConvRow> rows;
+    rows.reserve(meshes.size());
 
-                // 2. Create Dirichlet constraints at time step n+1
-                AffineConstraints<> constraints_u_np1;
-                AffineConstraints<> constraints_v_np1;
-                make_dirichlet_constraints(t_np1, constraints_u_np1);
-                make_velocity_dirichlet_constraints(t_np1, constraints_v_np1);
+    if (meshes.empty())
+        return rows;
 
-                // 3. Build Dirichlet values map for velocity at time step n+1
-                std::map<types::global_dof_index, double> v_boundary_values;
-                boundary_v->set_time(t_np1);
-                for (const auto id: boundary_ids)
-                    VectorTools::interpolate_boundary_values(
-                            dof_handler, id, *boundary_v, v_boundary_values);
+    // Pre-generate all meshes (rank 0) so the solve loop stays clean.
+    struct GeneratedMesh {
+        double       h;
+        unsigned int Nx;
+        std::string  msh_path;
+    };
+    std::vector<GeneratedMesh> generated;
+    generated.reserve(meshes.size());
 
-                // 4. Advance the solution to time step n+1
-                time_integrator->advance(t_n,
-                                         deltat,
-                                         mass_matrix,
-                                         stiffness_matrix,
-                                         forcing_n,
-                                         forcing_np1,
-                                         constraints_v_np1,
-                                         v_boundary_values,
-                                         solution_owned,
-                                         velocity_owned);
-
-                // 5. Apply Dirichlet constraints to the solution and velocity at time step n+1
-                constraints_u_np1.distribute(solution_owned);
-                constraints_v_np1.distribute(velocity_owned);
+    std::error_code       ec;
+    std::filesystem::path out_dir;
 
 
-                // 6. Update the solution and velocity vectors with ghost values
-                solution = solution_owned;
-                velocity = velocity_owned;
-                solution.update_ghost_values();
-                velocity.update_ghost_values();
+    if (mpi_rank == 0) {
+        // We ignore the provided mesh template file path and instead use a hardcoded
+        // structured square template, injecting Nx.
+        // This avoids creating per-run temporary .geo files/directories.
+        // Note: Nx controls the number of subdivisions per side (Transfinite uses Nx+1 points).
+        const std::string square_structured_geo_template =
+                "// Structured unit square mesh (generated)\n"
+                "// Nx is injected by run_space_convergence\n"
+                "L = 1.0;\n"
+                "Point(1) = {0, 0, 0, 1.0};\n"
+                "Point(2) = {L, 0, 0, 1.0};\n"
+                "Point(3) = {L, L, 0, 1.0};\n"
+                "Point(4) = {0, L, 0, 1.0};\n\n"
+                "Line(1) = {1,2};\n"
+                "Line(2) = {2,3};\n"
+                "Line(3) = {3,4};\n"
+                "Line(4) = {4,1};\n\n"
+                "Curve Loop(1) = {1,2,3,4};\n"
+                "Plane Surface(1) = {1};\n\n"
+                "// Transfinite (structured) discretization\n"
+                "Transfinite Curve {1,2,3,4} = Nx+1 Using Progression 1;\n"
+                "Transfinite Surface {1};\n\n"
+                "Physical Surface(\"domain\") = {1};\n"
+                "Physical Curve(\"boundary\") = {1,2,3,4};\n";
 
-                // 6. Compute errors if exact solution is available: store them for later summary
-                if (parameters.problem.type == ProblemType::MMS) {
-                    const auto [u_L2, u_H1, v_L2] = compute_error_norms(t_np1);
-                    if (mpi_rank == 0) {
-                        time_history.push_back(t_np1);
-                        error_u_L2_history.push_back(u_L2);
-                        error_u_H1_history.push_back(u_H1);
-                        error_v_L2_history.push_back(v_L2);
-                    }
+        // Stable run id for generated meshes.
+        const auto        uuid     = boost::uuids::random_generator()();
+        const std::string uuid_str = to_string(uuid);
+
+        out_dir = std::filesystem::temp_directory_path() / ("nmpde_wave_space_conv_" + uuid_str);
+
+        std::filesystem::create_directories(out_dir, ec);
+        AssertThrow(!ec, ExcMessage("Failed to create mesh output directory: " + out_dir.string()));
+
+        // Build the list of target meshes (Nx, h) deterministically.
+        for (const auto &_mesh: meshes) {
+            const double h = _mesh.second;
+            AssertThrow(h > 0.0, ExcMessage("Space convergence: h must be > 0"));
+            const auto Nx = static_cast<unsigned int>(std::lround(1.0 / h));
+            AssertThrow(Nx >= 1u, ExcMessage("Space convergence: computed Nx must be >= 1"));
+
+            const std::string msh_path = (out_dir / ("Nx" + std::to_string(Nx) + ".msh")).string();
+            generated.push_back({h, Nx, msh_path});
+        }
+
+        for (const auto &gm: generated) {
+            // Explicit, unambiguous Nx injection.
+            const std::string geo_with_Nx =
+                    "Nx = " + std::to_string(gm.Nx) + ";\n" + square_structured_geo_template;
+            const std::string inline_geo =
+                    std::string(mesh_generator::inline_geo_prefix) + "\n" + geo_with_Nx;
+
+            try {
+                mesh_generator::gmsh_generate_msh(inline_geo, gm.msh_path);
+            } catch (const std::exception &e) {
+                AssertThrow(false,
+                            ExcMessage(std::string("Failed generating mesh for Nx=") +
+                                       std::to_string(gm.Nx) + ": " + e.what()));
+            }
+        }
+    }
+    // Broadcast generated mesh info to all ranks.
+    {
+        auto n_meshes = generated.size();
+        MPI_Bcast(&n_meshes, 1, MPI_UNSIGNED_LONG, 0, MPI_COMM_WORLD);
+
+        if (mpi_rank != 0) {
+            generated.resize(n_meshes);
+        }
+
+        for (unsigned long i = 0; i < n_meshes; ++i) {
+            MPI_Bcast(&generated[i].h, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+            MPI_Bcast(&generated[i].Nx, 1, MPI_UNSIGNED, 0, MPI_COMM_WORLD);
+
+            unsigned long path_size = 0;
+            if (mpi_rank == 0)
+                path_size = generated[i].msh_path.size();
+
+            MPI_Bcast(&path_size, 1, MPI_UNSIGNED_LONG, 0, MPI_COMM_WORLD);
+
+            if (mpi_rank != 0)
+                generated[i].msh_path.resize(path_size);
+
+            if (path_size > 0) {
+                MPI_Bcast(generated[i].msh_path.data(),
+                          static_cast<int>(path_size),
+                          MPI_CHAR,
+                          0,
+                          MPI_COMM_WORLD);
+            }
+        }
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+
+
+    // Solve loop
+    for (const auto &gm: generated) {
+        auto prm                      = std::make_shared<Parameters<dim>>(prm_base);
+        prm->time.dt                  = dt_small;
+        prm->mesh.mesh_file           = gm.msh_path;
+        prm->output.output_every      = 999999;
+        prm->output.compute_error     = true;
+        prm->output.convergence_study = false;
+
+        Wave w(prm);
+        w.setup();
+        const auto e = w.solve_and_get_final_errors();
+        rows.push_back({gm.h, gm.msh_path, e});
+    }
+
+    // Compute observed orders.
+    for (size_t i = 1; i < rows.size(); ++i) {
+        rows[i].p_uL2 =
+                estimate_order(rows[i - 1].err.u_L2, rows[i].err.u_L2, rows[i - 1].h, rows[i].h);
+        rows[i].p_uH1 =
+                estimate_order(rows[i - 1].err.u_H1, rows[i].err.u_H1, rows[i - 1].h, rows[i].h);
+        rows[i].p_vL2 =
+                estimate_order(rows[i - 1].err.v_L2, rows[i].err.v_L2, rows[i - 1].h, rows[i].h);
+    }
+
+    // Cleanup generated meshes (rank 0).
+    if (mpi_rank == 0) {
+        std::filesystem::remove_all(out_dir, ec);
+    }
+
+    return rows;
+}
+
+void Wave::write_space_convergence_csv(const std::string               &filename,
+                                       const std::vector<SpaceConvRow> &rows) const {
+    if (mpi_rank != 0)
+        return;
+
+    std::ofstream csv(filename);
+    AssertThrow(csv, ExcMessage("Could not open CSV file: " + filename));
+
+    // Header
+    csv << "h,u_L2,u_H1,v_L2,p_uL2,p_uH1,p_vL2,mesh\n";
+
+    auto write_double = [&](double v) {
+        if (std::isnan(v))
+            csv << "nan";
+        else
+            csv << std::scientific << std::setprecision(10) << v;
+    };
+
+    for (const auto &[h, _mesh, err, p_uL2, p_uH1, p_vL2]: rows) {
+        // h
+        csv << std::fixed << std::setprecision(6) << h << ",";
+
+        // errors
+        write_double(err.u_L2);
+        csv << ",";
+        write_double(err.u_H1);
+        csv << ",";
+        write_double(err.v_L2);
+        csv << ",";
+
+        // orders
+        write_double(p_uL2);
+        csv << ",";
+        write_double(p_uH1);
+        csv << ",";
+        write_double(p_vL2);
+        csv << ",";
+
+        // mesh path (quoted to be CSV-safe)
+        csv << '"' << _mesh << '"' << "\n";
+    }
+
+    csv.close();
+}
+
+Wave::ErrorNorms Wave::solve_and_get_final_errors() {
+    do_solve();
+    ErrorNorms out = {};
+    if (parameters->problem.type == ProblemType::MMS) {
+        const double t_final       = T;
+        const auto [uL2, uH1, vL2] = compute_error_norms(t_final);
+        out                        = {uL2, uH1, vL2};
+    }
+    return out;
+}
+
+void Wave::process_mesh_input() {
+    try {
+        const std::filesystem::path p(mesh_file_name);
+
+        if (mesh_generator::is_inline_geo(mesh_file_name)) {
+            if (mpi_rank == 0) {
+                pcout << "-----------------------------------------------" << std::endl;
+                pcout << "Generating mesh from inline .geo string using gmsh..." << std::endl;
+            }
+
+            std::string uuid_str;
+            if (mpi_rank == 0) {
+                const auto uuid = boost::uuids::random_generator()();
+                uuid_str        = to_string(uuid);
+            }
+            Utilities::MPI::broadcast(MPI_COMM_WORLD, uuid_str, 0);
+
+            const std::filesystem::path out = std::filesystem::temp_directory_path() /
+                                              ("nmpde_wave_inline_" + uuid_str + ".msh");
+
+            if (mpi_rank == 0) {
+                try {
+                    mesh_generator::gmsh_generate_msh(mesh_file_name, out.string());
+                } catch (const std::exception &e) {
+                    AssertThrow(false, ExcMessage(e.what()));
                 }
+            }
+            MPI_Barrier(MPI_COMM_WORLD);
 
-                if (step % output_every == 0) {
-                    output(step);
+            mesh_file_name = out.string();
+
+            if (mpi_rank == 0) {
+                pcout << "  Mesh generated: " << mesh_file_name << std::endl;
+                pcout << "-----------------------------------------------" << std::endl;
+            }
+            return;
+        }
+
+        if (!p.has_extension()) {
+            AssertThrow(false,
+                        ExcMessage("Mesh file name must have an extension (.msh or .geo): " +
+                                   mesh_file_name));
+        }
+        if (p.extension() == ".geo") {
+            pcout << "-----------------------------------------------" << std::endl;
+            pcout << "Generating mesh from .geo file using gmsh..." << std::endl;
+            std::filesystem::path out = p;
+            out.replace_extension(".msh");
+
+            if (mpi_rank == 0) {
+                pcout << "  Running gmsh to generate: " << out.string() << std::endl;
+                try {
+                    mesh_generator::gmsh_generate_msh(p.string(), out.string());
+                } catch (const std::exception &e) {
+                    AssertThrow(false, ExcMessage(e.what()));
                 }
+            }
+            MPI_Barrier(MPI_COMM_WORLD);
 
-                return t_np1 < T;
-            },
-            "Time-stepping progress",
-            [&](const unsigned int step) -> std::string {
-                std::ostringstream oss;
-                const double       t_show = static_cast<double>(step) * deltat; // end of this step
-                oss << "t=" << std::fixed << std::setprecision(5) << t_show;
-                return oss.str();
-            });
-
-    // After time-stepping, print an extended error summary if using MMS (only on rank 0)
-    if (parameters.problem.type == ProblemType::MMS && mpi_rank == 0) {
-        print_error_summary();
+            mesh_file_name = out.string();
+            pcout << "  Mesh generated: " << mesh_file_name << std::endl;
+            pcout << "-----------------------------------------------" << std::endl;
+        } else if (p.extension() == ".msh") {
+            // Nothing to do
+        } else {
+            AssertThrow(false,
+                        ExcMessage("Unsupported mesh file extension (use .msh or .geo): " +
+                                   mesh_file_name));
+        }
+    } catch (const std::exception &e) {
+        AssertThrow(false,
+                    ExcMessage(std::string("Exception while processing mesh input: ") + e.what()));
     }
 }

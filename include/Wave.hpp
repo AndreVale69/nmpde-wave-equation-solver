@@ -32,9 +32,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <utility>
 #include <vector>
 
+#include "conditional_o_stream_wrapper.hpp"
 #include "enum/time_scheme.hpp"
 #include "mms_functions.hpp"
 #include "parameters.hpp"
@@ -53,27 +55,52 @@ public:
     // Constructor. We provide the final time, time step Delta t and theta method
     // parameter as constructor arguments.
     explicit Wave(const std::string &parameters_file)
-        : parameters(Parameters<dim>(parameters_file))
+        : parameters_file(parameters_file)
+        , parameters(std::make_shared<Parameters<dim>>(parameters_file))
         , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
         , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
         , pcout(std::cout, mpi_rank == 0)
-        , T(parameters.time.T)
-        , mesh_file_name(parameters.mesh.mesh_file)
-        , r(parameters.mesh.degree)
-        , output_every(parameters.output.output_every)
-        , deltat(parameters.time.dt)
-        , theta(parameters.time.theta)
-        , time_scheme(parameters.time.scheme)
+        , T(parameters->time.T)
+        , mesh_file_name(parameters->mesh.mesh_file)
+        , r(parameters->mesh.degree)
+        , output_every(parameters->output.output_every)
+        , deltat(parameters->time.dt)
+        , theta(parameters->time.theta)
+        , time_scheme(parameters->time.scheme)
         , mesh(MPI_COMM_WORLD) {
         // If the user provided a .geo file, try to generate a .msh mesh file
         // using gmsh automatically.
         process_mesh_input();
     }
 
+    // Alternative constructor that takes already created Parameters object.
+    explicit Wave(std::shared_ptr<const Parameters<dim>> parameters)
+        : parameters(std::move(parameters))
+        , mpi_size(Utilities::MPI::n_mpi_processes(MPI_COMM_WORLD))
+        , mpi_rank(Utilities::MPI::this_mpi_process(MPI_COMM_WORLD))
+        , pcout(std::cout, mpi_rank == 0)
+        , T(this->parameters->time.T)
+        , mesh_file_name(this->parameters->mesh.mesh_file)
+        , r(this->parameters->mesh.degree)
+        , output_every(this->parameters->output.output_every)
+        , deltat(this->parameters->time.dt)
+        , theta(this->parameters->time.theta)
+        , time_scheme(this->parameters->time.scheme)
+        , mesh(MPI_COMM_WORLD) {
+        AssertThrow(this->parameters, ExcMessage("Wave: parameters pointer is null"));
+        AssertThrow(!mesh_file_name.empty(), ExcMessage("Wave: mesh_file_name empty"));
+        // If the user provided a .geo file, try to generate a .msh mesh file
+        // using gmsh automatically.
+        process_mesh_input();
+    }
+
+    // Parameter file name.
+    std::string parameters_file;
+
     // Initialization.
     void setup();
 
-    // Solve the problem.
+    // Solve the problem or run convergence studies. It depends on the parameters.
     void solve();
 
 protected:
@@ -91,6 +118,12 @@ protected:
 
     // Output.
     void output(const unsigned int &time_step) const;
+
+    // Solve the problem (internal).
+    void do_solve();
+
+    // Convergence studies.
+    void convergence();
 
     // Error statistics structure.
     struct ErrorStatistics {
@@ -122,10 +155,58 @@ protected:
     // Print a summary of the errors computed during the simulation.
     void print_error_summary() const;
 
+    // Estimate the order of convergence given two errors and mesh sizes.
+    static double estimate_order(double e1, double e2, double h1, double h2);
+
+    // Time convergence structure.
+    struct TimeConvRow {
+        double     dt;
+        ErrorNorms err;
+
+        // Observed convergence orders between this row and the previous one.
+        // (First row has no previous row -> left as NaN.)
+        double q_uL2 = std::numeric_limits<double>::quiet_NaN();
+        double q_uH1 = std::numeric_limits<double>::quiet_NaN();
+        double q_vL2 = std::numeric_limits<double>::quiet_NaN();
+    };
+
+    // Run time convergence study.
+    static std::vector<TimeConvRow> run_time_convergence(const std::string         &prm_base,
+                                                         const std::vector<double> &dts);
+
+    // Write time convergence results to CSV.
+    void write_time_convergence_csv(const std::string              &filename,
+                                    const std::vector<TimeConvRow> &rows) const;
+
+    // Space convergence structure.
+    struct SpaceConvRow {
+        double      h;
+        std::string mesh;
+        ErrorNorms  err;
+
+        // Observed spatial convergence orders between this row and the previous one.
+        double p_uL2 = std::numeric_limits<double>::quiet_NaN();
+        double p_uH1 = std::numeric_limits<double>::quiet_NaN();
+        double p_vL2 = std::numeric_limits<double>::quiet_NaN();
+    };
+
+    // Run space convergence study.
+    std::vector<SpaceConvRow>
+    run_space_convergence(const std::string                                 &prm_base,
+                          const std::vector<std::pair<std::string, double>> &meshes,
+                          double                                             dt_small) const;
+
+    // Write space convergence results to CSV.
+    void write_space_convergence_csv(const std::string               &filename,
+                                     const std::vector<SpaceConvRow> &rows) const;
+
+    // Solve the problem and get the final errors.
+    ErrorNorms solve_and_get_final_errors();
+
     // Problem parameters. ////////////////////////////////////////////////////////
 
     // Parameters object.
-    Parameters<dim> parameters;
+    std::shared_ptr<const Parameters<dim>> parameters;
 
     // MPI parallel. /////////////////////////////////////////////////////////////
 
