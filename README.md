@@ -152,14 +152,14 @@ This is the shortest end-to-end path (GUI $\to$ MMS run $\to$ Streamlit):
 
 Example commands (from repo root):
 ```bash
-cmake --preset local-debug
-cmake --build --preset local-build
+cmake --preset nm4pde-lab
+cmake --build build/nm4pde-lab
 
 # (optional) generate/edit a prm file with the GUI
 python3 tools/prm_gui.py
 
 # MMS run
-mpirun -np 4 ./build/local-debug/nm4pde parameters/mms.prm
+mpirun -np 4 ./build/nm4pde-lab/nm4pde parameters/mms.prm
 
 # viewer (Docker)
 docker build -t nm4pde-mms-viewer tools/plot
@@ -203,8 +203,8 @@ This repo provides CMake presets (`CMakePresets.json`). If your environment matc
 
 Example (local toolchain preset):
 ```bash
-cmake --preset local-debug
-cmake --build --preset local-build
+cmake --preset nm4pde-lab
+cmake --build build/nm4pde-lab
 ```
 
 The build outputs the executable in:
@@ -214,12 +214,12 @@ The build outputs the executable in:
 
 Physical run (default example parameter file):
 ```bash
-mpirun -np 4 ./build/local-debug/nm4pde parameters/wave.prm
+mpirun -np 4 ./build/nm4pde-lab/nm4pde parameters/wave.prm
 ```
 
 MMS run (exports VTK + error CSV if enabled):
 ```bash
-mpirun -np 4 ./build/local-debug/nm4pde parameters/mms.prm
+mpirun -np 4 ./build/nm4pde-lab/nm4pde parameters/mms.prm
 ```
 
 ---
