@@ -4,10 +4,12 @@
 #include <deal.II/base/mpi.h>
 #include <deal.II/base/parameter_handler.h>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <unistd.h>
 
 #include "enum/boundary_type.hpp"
+#include "enum/convergence_type.hpp"
 #include "enum/problem_type.hpp"
 #include "enum/time_scheme.hpp"
 #include "problem_functions.hpp"
@@ -130,6 +132,30 @@ struct Parameters {
          * for non-MMS problems it will be ignored (and a warning printed).
          */
         bool compute_error = false;
+
+        /**
+         * @brief Whether to run a convergence study.
+         *
+         * This option is meaningful if and only if the problem type is MMS.
+         * If enabled for non-MMS problems it will be disabled (and a warning printed).
+         *
+         * When enabled in MMS mode, a convergence type must be provided.
+         */
+        bool convergence_study = false;
+
+        /**
+         * @brief Convergence study type (time or space).
+         * Only used when convergence_study is true.
+         */
+        ConvergenceType convergence_type = ConvergenceType::Time;
+
+        /**
+         * @brief Optional path to a CSV file where the convergence table will be written.
+         *
+         * This option is meaningful if and only if convergence_study is true.
+         * If provided while convergence_study is false, it will be ignored (and cleared).
+         */
+        std::string convergence_csv = "";
 
         /**
          * @brief Path to the CSV file where the error history will be saved.
@@ -308,6 +334,12 @@ private:
                                                              to_string(BoundaryType::Expr);
 
     /**
+     * @brief Selection string for convergence study type parameter.
+     */
+    inline static const std::string kSelectionConvergenceType =
+            to_string(ConvergenceType::Time) + "|" + to_string(ConvergenceType::Space);
+
+    /**
      * @brief Declare parameters in the given ParameterHandler.
      * @param prm ParameterHandler object to declare parameters in.
      */
@@ -417,6 +449,28 @@ private:
                     Patterns::Bool(),
                     "Whether to compute and save the error history (useful for MMS problems). "
                     "If set to true and the problem is not MMS, this option will be ignored.");
+
+            prm.declare_entry(
+                    "convergence_study",
+                    "false",
+                    Patterns::Bool(),
+                    "Whether to run a convergence study (only meaningful for MMS problems). "
+                    "If set to true and the problem is not MMS, this option will be ignored.");
+
+            prm.declare_entry("convergence_type",
+                              to_string(ConvergenceType::Time),
+                              Patterns::Selection(kSelectionConvergenceType),
+                              "Convergence study type (only if convergence_study is true): '" +
+                                      to_string(ConvergenceType::Time) + "' or '" +
+                                      to_string(ConvergenceType::Space) + "'.");
+
+            prm.declare_entry("convergence_csv",
+                              "",
+                              Patterns::Anything(),
+                              "Optional CSV file path where the convergence table will be saved "
+                              "(used only if "
+                              "convergence_study is true). Leave empty to disable CSV output.");
+
             prm.declare_entry("error_file",
                               kDefaultErrorFile,
                               Patterns::Anything(),
@@ -484,6 +538,9 @@ private:
         {
             output.output_every         = prm.get_integer("every");
             output.compute_error        = prm.get_bool("compute_error");
+            output.convergence_study    = prm.get_bool("convergence_study");
+            output.convergence_type     = convergence_type_from_string(prm.get("convergence_type"));
+            output.convergence_csv      = prm.get("convergence_csv");
             output.error_history_file   = prm.get("error_file");
             output.vtk_output_directory = prm.get("vtk_directory");
         }
@@ -495,6 +552,26 @@ private:
                   << "compute_error will be disabled (error history only available for MMS)."
                   << std::endl;
             output.compute_error = false;
+        }
+
+        // Validate convergence study option based on problem type
+        if (output.convergence_study && problem.type != ProblemType::MMS) {
+            pcout << "Warning: 'convergence_study' was requested but the problem type is not MMS. "
+                  << "convergence_study will be disabled (convergence study only available for "
+                     "MMS)."
+                  << std::endl;
+            output.convergence_study = false;
+        }
+
+        // If convergence study is enabled, we must have a valid type.
+        // Patterns::Selection should already prevent invalid strings, but keep a clear message.
+        if (output.convergence_study) {
+            if (output.convergence_type != ConvergenceType::Time &&
+                output.convergence_type != ConvergenceType::Space) {
+                throw std::runtime_error(
+                        "Invalid convergence_type while convergence_study is enabled. "
+                        "Expected 'time' or 'space'.");
+            }
         }
 
         // Interactive prompts (only on rank 0 and only if stdin is a TTY).
@@ -530,6 +607,46 @@ private:
                     pcout << "Note: error computation is only available for MMS problems.\n";
                 }
 
+                // Ask about running convergence study
+                if (problem.type == ProblemType::MMS) {
+                    pcout << "Do you want to run a convergence study? (y/n) ["
+                          << (output.convergence_study ? "y" : "n") << "] : ";
+                    std::string ans_conv;
+                    std::getline(std::cin, ans_conv);
+                    if (!ans_conv.empty()) {
+                        if (ans_conv == "y" || ans_conv == "Y" || ans_conv == "1")
+                            output.convergence_study = true;
+                        else
+                            output.convergence_study = false;
+                    }
+
+                    if (output.convergence_study) {
+                        pcout << "Convergence type (time/space) ["
+                              << to_string(output.convergence_type) << "] : ";
+                        std::string conv_type;
+                        std::getline(std::cin, conv_type);
+                        if (!conv_type.empty()) {
+                            // normalize
+                            for (auto &ch: conv_type)
+                                ch = static_cast<char>(::tolower(ch));
+                            output.convergence_type = convergence_type_from_string(conv_type);
+                        }
+
+                        // Ask optional CSV path for convergence table
+                        pcout << "CSV file for convergence table (optional) [press Enter to keep '"
+                              << output.convergence_csv << "'] : ";
+                        std::string conv_csv;
+                        std::getline(std::cin, conv_csv);
+                        if (!conv_csv.empty())
+                            output.convergence_csv = conv_csv;
+                    } else {
+                        // if disabled, keep it empty
+                        output.convergence_csv.clear();
+                    }
+                } else {
+                    pcout << "Note: convergence study is only available for MMS problems.\n";
+                }
+
                 // Ask where to write VTK output directory (allow empty to keep current):
                 pcout << "VTK output directory [press Enter to keep '"
                       << output.vtk_output_directory << "'] : ";
@@ -541,8 +658,17 @@ private:
 
             // Broadcast the (possibly updated) choices to all ranks
             Utilities::MPI::broadcast(MPI_COMM_WORLD, output.compute_error, 0);
+            Utilities::MPI::broadcast(MPI_COMM_WORLD, output.convergence_study, 0);
             Utilities::MPI::broadcast(MPI_COMM_WORLD, output.error_history_file, 0);
             Utilities::MPI::broadcast(MPI_COMM_WORLD, output.vtk_output_directory, 0);
+            Utilities::MPI::broadcast(MPI_COMM_WORLD, output.convergence_csv, 0);
+
+            // convergence_type: broadcast as string to avoid dealing with enum serialization
+            {
+                std::string conv_str = to_string(output.convergence_type);
+                Utilities::MPI::broadcast(MPI_COMM_WORLD, conv_str, 0);
+                output.convergence_type = convergence_type_from_string(conv_str);
+            }
         } catch (std::exception &e) {
             pcout << "Warning: interactive prompts skipped due to exception: " << e.what()
                   << std::endl;
@@ -565,6 +691,13 @@ private:
         // Inform about error history file (if applicable)
         if (output.compute_error) {
             pcout << "Error history will be saved to: " << output.error_history_file << std::endl;
+        }
+
+        if (output.convergence_study) {
+            pcout << "Convergence study enabled. Type: " << output.convergence_type << std::endl;
+            if (!output.convergence_csv.empty())
+                pcout << "Convergence table CSV will be saved to: " << output.convergence_csv
+                      << std::endl;
         }
     }
 };
