@@ -410,7 +410,8 @@ void Wave::convergence() {
 
     if (parameters->output.convergence_type == ConvergenceType::Time) {
         pcout << "Running time convergence study..." << std::endl;
-        const auto rows = run_time_convergence(parameters_file, {0.2, 0.1, 0.05, 0.025});
+        const auto rows = run_time_convergence(parameters_file,
+                                               {0.2, 0.15, 0.1, 0.075, 0.05, 0.025, 0.01, 0.005});
 
         ConvergenceTable table;
 
@@ -455,12 +456,16 @@ void Wave::convergence() {
         pcout << "Running space convergence study..." << std::endl;
 
         const auto rows = run_space_convergence(parameters_file,
-                                                {
-                                                        {"mesh/square_structured.geo", 1.0 / 10.0},
-                                                        {"mesh/square_structured.geo", 1.0 / 20.0},
-                                                        {"mesh/square_structured.geo", 1.0 / 40.0},
-                                                        {"mesh/square_structured.geo", 1.0 / 80.0},
-                                                },
+                                                {{"mesh/square_structured.geo", 1.0 / 10.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 20.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 30.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 40.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 50.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 60.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 70.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 80.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 90.0},
+                                                 {"mesh/square_structured.geo", 1.0 / 100.0}},
                                                 /*dt_small=*/1e-3);
 
         ConvergenceTable table;
