@@ -136,7 +136,7 @@ protected:
     const unsigned int mpi_rank;
 
     // Parallel output stream.
-    ConditionalOStream pcout;
+    ConditionalOStreamWrapper pcout;
 
     // Problem definition. ///////////////////////////////////////////////////////
 

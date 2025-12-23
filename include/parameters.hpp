@@ -260,7 +260,7 @@ private:
     /**
      * @brief Parallel output stream.
      */
-    ConditionalOStream pcout;
+    ConditionalOStreamWrapper pcout;
 
     /**
      * @brief Default mesh file path.
