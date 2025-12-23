@@ -1,5 +1,9 @@
 subsection Problem
-  set type = physical
+  set type = expr
+  set u0_expr = sin(pi*x)*sin(pi*y)
+  set v0_expr = 0
+  set mu_expr = 1
+  set f_expr  = 0
 end
 
 subsection Boundary condition
@@ -12,7 +16,7 @@ subsection Mesh
 end
 
 subsection Time
-  set T      = 1.0
+  set T      = 5.0
   set dt     = 0.01
   set theta  = 1.0
   set scheme = theta
@@ -20,4 +24,16 @@ end
 
 subsection Output
   set every = 1
+end
+
+subsection Study
+  set enable_dissipation = true
+  set dissipation_every = 1
+  set dissipation_csv = diss_T_P1_dt0p01_th1p0_M11.csv
+
+  set enable_modal = true
+  set modal_every = 1
+  set modal_csv = modal_T_P1_dt0p01_th1p0_M11.csv
+  set modal_k = 1
+  set modal_l = 1
 end

@@ -170,6 +170,49 @@ struct Parameters {
         std::string vtk_output_directory = kDefaultVTKDir;
     } output;
 
+    struct Study {
+        /**
+         * @brief Enable dissipation study.
+         */
+        bool enable_dissipation_study = false;
+
+        /**
+         * @brief Dissipation study output frequency.
+         */
+        unsigned int dissipation_every = 1;
+
+        /**
+         * @brief Dissipation study CSV output file name.
+         */
+        std::string dissipation_csv = "dissipation.csv";
+
+        /**
+         * @brief Enable modal study. If enabled, the program tracks
+         * the evolution of a specific mode defined by (k,l).
+         */
+        bool enable_modal_study = false;
+
+        /**
+         * @brief Modal study output frequency.
+         */
+        unsigned int modal_every = 1;
+
+        /**
+         * @brief Modal study CSV output file name.
+         */
+        std::string modal_csv = "modal.csv";
+
+        /**
+         * @brief Mode indices (k,l) to track in the modal study.
+         */
+        unsigned int modal_k = 1; // sin(k*pi*x)
+
+        /**
+         * @brief Mode indices (k,l) to track in the modal study.
+         */
+        unsigned int modal_l = 1; // sin(l*pi*y)
+    } study;
+
     /**
      * @brief Constructor: reads parameters from the specified input file.
      * @param filename Input file name.
@@ -525,6 +568,19 @@ private:
                               "Directory where VTK (.vtu/.pvtu) output files will be written.");
         }
         prm.leave_subsection();
+
+        prm.enter_subsection("Study");
+        {
+            prm.declare_entry("enable_dissipation", "false", Patterns::Bool());
+            prm.declare_entry("dissipation_every", "1", Patterns::Integer(1));
+            prm.declare_entry("dissipation_csv", "dissipation.csv", Patterns::Anything());
+            prm.declare_entry("enable_modal", "false", Patterns::Bool());
+            prm.declare_entry("modal_every", "1", Patterns::Integer(1));
+            prm.declare_entry("modal_csv", "modal.csv", Patterns::Anything());
+            prm.declare_entry("modal_k", "1", Patterns::Integer(1));
+            prm.declare_entry("modal_l", "1", Patterns::Integer(1));
+        }
+        prm.leave_subsection();
     }
 
     /**
@@ -593,6 +649,19 @@ private:
             output.convergence_csv      = prm.get("convergence_csv");
             output.error_history_file   = prm.get("error_file");
             output.vtk_output_directory = prm.get("vtk_directory");
+        }
+        prm.leave_subsection();
+
+        prm.enter_subsection("Study");
+        {
+            study.enable_dissipation_study = prm.get_bool("enable_dissipation");
+            study.dissipation_every        = prm.get_integer("dissipation_every");
+            study.dissipation_csv          = prm.get("dissipation_csv");
+            study.enable_modal_study       = prm.get_bool("enable_modal");
+            study.modal_every              = prm.get_integer("modal_every");
+            study.modal_csv                = prm.get("modal_csv");
+            study.modal_k                  = prm.get_integer("modal_k");
+            study.modal_l                  = prm.get_integer("modal_l");
         }
         prm.leave_subsection();
 

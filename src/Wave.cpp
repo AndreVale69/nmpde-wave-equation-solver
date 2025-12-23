@@ -13,12 +13,39 @@
 #include <deal.II/base/convergence_table.h>
 #include <deal.II/base/utilities.h>
 #include <deal.II/fe/mapping_fe.h>
+#include <deal.II/numerics/vector_tools.h>
 #include <fstream>
 #include <iomanip>
 #include <numeric>
 #include <regex>
 #include <sstream>
 #include <string>
+
+class SineMode2D : public Function<2> {
+public:
+    SineMode2D(const unsigned int k, const unsigned int l) : Function<2>(1), k(k), l(l) {}
+
+    double value(const Point<2> &p, const unsigned int /*component*/ = 0) const override {
+        return std::sin(k * numbers::PI * p[0]) * std::sin(l * numbers::PI * p[1]);
+    }
+
+private:
+    const unsigned int k, l;
+};
+
+double Wave::compute_energy(const TrilinosWrappers::MPI::Vector &u_owned,
+                            const TrilinosWrappers::MPI::Vector &v_owned) const {
+    // tmp = M v
+    TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
+    mass_matrix.vmult(tmp, v_owned);
+    const double vMv = v_owned * tmp; // dot product
+
+    // tmp = K u
+    stiffness_matrix.vmult(tmp, u_owned);
+    const double uKu = u_owned * tmp;
+
+    return 0.5 * (vMv + uKu);
+}
 
 void Wave::setup() {
     pcout << "===============================================" << std::endl;
@@ -318,10 +345,96 @@ void Wave::do_solve() {
         make_velocity_dirichlet_constraints(0.0, constraints_v0);
         constraints_v0.distribute(velocity_owned);
 
+        // Quick diagnostic: if both are (almost) zero, E0 will be (almost) zero.
+        {
+            const double u0_l2 = solution_owned.l2_norm();
+            const double v0_l2 = velocity_owned.l2_norm();
+            pcout << "IC norms after constraints: ||u0||_2=" << u0_l2 << ", ||v0||_2=" << v0_l2
+                  << std::endl;
+            if (u0_l2 == 0.0 && v0_l2 == 0.0) {
+                pcout << "[Hint] Both u0 and v0 are exactly zero after applying Dirichlet BCs, "
+                         "so the discrete energy E0 will be 0 and E/E0 is undefined. "
+                         "If you want a nonzero energy, use Problem type 'expr' (u0_expr/v0_expr) "
+                         "or provide physical initial conditions."
+                      << std::endl;
+            }
+        }
+
         // Output the initial solution (time step 0)
         output(0);
         pcout << "-----------------------------------------------" << std::endl;
     }
+
+    // -------------------- Dissipation study (optional) --------------------
+    double        E0 = 1.0;
+    std::ofstream dissipation_out;
+
+    if (parameters->study.enable_dissipation_study) {
+        E0 = compute_energy(solution_owned, velocity_owned);
+
+        if (mpi_rank == 0) {
+            dissipation_out.open(parameters->study.dissipation_csv);
+            dissipation_out << "n,t,E,E_over_E0\n";
+
+            // Guard against E0=0 (e.g. zero initial conditions) to avoid NaNs in output.
+            const double E_over_E0_0 = (std::isfinite(E0) && std::abs(E0) > 0.0) ? 1.0 : 0.0;
+            dissipation_out << 0 << "," << 0.0 << "," << E0 << "," << E_over_E0_0 << "\n";
+            dissipation_out.flush();
+        }
+
+        if (!(std::isfinite(E0) && std::abs(E0) > 0.0)) {
+            pcout << "[Study] Dissipation enabled, but E0 is not positive/finite (E0=" << E0
+                  << "). E/E0 will be reported as 0 to avoid NaNs.\n";
+        } else {
+            pcout << "[Study] Dissipation enabled. E0 = " << E0 << ", writing to "
+                  << parameters->study.dissipation_csv << std::endl;
+        }
+        pcout << "-----------------------------------------------" << std::endl;
+    }
+
+    // -------------------- Modal study (optional) --------------------
+    TrilinosWrappers::MPI::Vector phi_owned(locally_owned_dofs, MPI_COMM_WORLD);
+    TrilinosWrappers::MPI::Vector Mphi_owned(locally_owned_dofs, MPI_COMM_WORLD);
+    double                        phi_M_phi = 1.0;
+
+    std::ofstream modal_out;
+
+    if (parameters->study.enable_modal_study) {
+        // Build phi = sin(k*pi*x) sin(l*pi*y) interpolated on FE space
+        SineMode2D mode_fun(parameters->study.modal_k, parameters->study.modal_l);
+        VectorTools::interpolate(dof_handler, mode_fun, phi_owned);
+
+        // Enforce Dirichlet zero on phi as well
+        const auto boundary_values_zero = build_zero_dirichlet_map();
+        for (const auto &[dof, val]: boundary_values_zero)
+            if (phi_owned.locally_owned_elements().is_element(dof))
+                phi_owned[dof] = val;
+        phi_owned.compress(VectorOperation::insert);
+
+        // Precompute Mphi and denom
+        mass_matrix.vmult(Mphi_owned, phi_owned);
+        phi_M_phi = phi_owned * Mphi_owned;
+
+        if (mpi_rank == 0) {
+            modal_out.open(parameters->study.modal_csv);
+            modal_out << "n,t,a,adot\n";
+        }
+
+        // Log at t=0
+        const double a0    = (solution_owned * Mphi_owned) / phi_M_phi;
+        const double adot0 = (velocity_owned * Mphi_owned) / phi_M_phi;
+
+        if (mpi_rank == 0) {
+            modal_out << 0 << "," << 0.0 << "," << a0 << "," << adot0 << "\n";
+            modal_out.flush();
+        }
+
+        pcout << "[Study] Modal enabled. Mode (k,l)=(" << parameters->study.modal_k << ","
+              << parameters->study.modal_l << "), writing to " << parameters->study.modal_csv
+              << std::endl;
+        pcout << "-----------------------------------------------" << std::endl;
+    }
+
 
     ProgressBar progress(static_cast<unsigned int>(std::ceil(T / deltat)), MPI_COMM_WORLD, &pcout);
     progress.for_while(
@@ -363,7 +476,6 @@ void Wave::do_solve() {
                 constraints_u_np1.distribute(solution_owned);
                 constraints_v_np1.distribute(velocity_owned);
 
-
                 // 6. Update the solution and velocity vectors with ghost values
                 solution = solution_owned;
                 velocity = velocity_owned;
@@ -379,6 +491,29 @@ void Wave::do_solve() {
                         error_u_H1_history.push_back(u_H1);
                         error_v_L2_history.push_back(v_L2);
                     }
+                }
+
+                // -------------------- Dissipation study (optional) --------------------
+                if (parameters->study.enable_dissipation_study &&
+                    (step % parameters->study.dissipation_every == 0)) {
+                    const double E = compute_energy(solution_owned, velocity_owned);
+                    if (mpi_rank == 0) {
+                        const double E_over_E0 =
+                                (std::isfinite(E0) && std::abs(E0) > 0.0) ? (E / E0) : 0.0;
+                        dissipation_out << step << "," << t_np1 << "," << E << "," << E_over_E0
+                                        << "\n";
+                        dissipation_out.flush();
+                    }
+                }
+
+                // -------------------- Modal study (optional) --------------------
+                if (parameters->study.enable_modal_study &&
+                    (step % parameters->study.modal_every == 0)) {
+                    const double a    = (solution_owned * Mphi_owned) / phi_M_phi;
+                    const double adot = (velocity_owned * Mphi_owned) / phi_M_phi;
+
+                    if (mpi_rank == 0)
+                        modal_out << step << "," << t_np1 << "," << a << "," << adot << "\n";
                 }
 
                 if (step % output_every == 0) {
@@ -1164,4 +1299,14 @@ void Wave::process_mesh_input() {
         AssertThrow(false,
                     ExcMessage(std::string("Exception while processing mesh input: ") + e.what()));
     }
+}
+
+std::map<types::global_dof_index, double> Wave::build_zero_dirichlet_map() const {
+    std::map<types::global_dof_index, double> bv;
+    Functions::ZeroFunction<dim>              zero;
+
+    for (const auto id: boundary_ids)
+        VectorTools::interpolate_boundary_values(dof_handler, id, zero, bv);
+
+    return bv;
 }
