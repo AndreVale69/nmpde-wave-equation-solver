@@ -1,0 +1,29 @@
+subsection Problem
+  set type = mms
+  set u_exact_expr = sin(pi*x)*sin(pi*y)*cos(1.0*t)
+  set v_exact_expr = -1.0*sin(pi*x)*sin(pi*y)*sin(1.0*t)
+  set f_exact_expr = (2*pi^2 - 1.0^2)*sin(pi*x)*sin(pi*y)*cos(1.0*t)
+end
+
+subsection Boundary condition
+  set type = zero
+end
+
+subsection Mesh
+  set mesh_file = mesh/square_structured.geo
+  set degree    = 1
+end
+
+subsection Time
+  set T      = 1.0
+  set dt     = 0.01
+  set theta  = 0.5
+  set scheme = theta
+end
+
+subsection Output
+  set every = 1
+  set compute_error = true
+  set error_file = crank_nicolson-mesh50-dt0_01/crank_nicolson-mesh50-dt0_01.csv
+  set vtk_directory = crank_nicolson-mesh50-dt0_01
+end

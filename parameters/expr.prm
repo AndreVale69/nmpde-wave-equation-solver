@@ -1,0 +1,27 @@
+subsection Problem
+  set type        = expr
+  set u0_expr     = sin(pi*x)*sin(pi*y)
+  set v0_expr     = 0
+  set mu_expr     = 0
+  set f_expr      = (2*pi*pi - 1)*sin(pi*x)*sin(pi*y)*cos(1*t)
+end
+
+subsection Boundary condition
+  set type = zero
+end
+
+subsection Mesh
+  set mesh_file = ../mesh/square_structured.geo
+  set degree    = 1
+end
+
+subsection Time
+  set T      = 1.0
+  set dt     = 0.01
+  set theta  = 1.0
+  set scheme = theta
+end
+
+subsection Output
+  set every = 1
+end

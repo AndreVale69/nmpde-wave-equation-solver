@@ -1,17 +1,17 @@
-subsection Study
-  set enable_dissipation = true
-  set dissipation_every = 1
-  set dissipation_csv = diss_T_P1_dt0p01_th1p0_M11.csv
+subsection Problem
+  set type = expr
+  set u0_expr = sin(pi*x)*sin(pi*y)
+  set v0_expr = 0
+  set mu_expr = 1
+  set f_expr  = 0
+end
 
-  set enable_modal = true
-  set modal_every = 1
-  set modal_csv = modal_T_P1_dt0p01_th1p0_M11.csv
-  set modal_k = 1
-  set modal_l = 1
+subsection Boundary condition
+  set type = zero
 end
 
 subsection Mesh
-  set mesh_file = ../mesh/square_structured.geo
+  set mesh_file = mesh/square_structured.geo
   set degree    = 1
 end
 
@@ -23,5 +23,17 @@ subsection Time
 end
 
 subsection Output
-  set every = 50
+  set every = 1
+end
+
+subsection Study
+  set enable_dissipation = true
+  set dissipation_every = 1
+  set dissipation_csv = diss_T_P1_dt0p01_th1p0_M11.csv
+
+  set enable_modal = true
+  set modal_every = 1
+  set modal_csv = modal_T_P1_dt0p01_th1p0_M11.csv
+  set modal_k = 1
+  set modal_l = 1
 end

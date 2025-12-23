@@ -1,6 +1,9 @@
 #ifndef NM4PDE_THETA_INTEGRATOR_HPP
 #define NM4PDE_THETA_INTEGRATOR_HPP
 
+#include <deal.II/lac/affine_constraints.h>
+
+
 #include "time_integrator.hpp"
 
 class ThetaIntegrator : public TimeIntegrator {
@@ -13,20 +16,19 @@ public:
                     const TrilinosWrappers::MPI::Vector  &V0,
                     const double                          dt) override;
 
-    void advance(const double                          t_n,
-                 const double                          dt,
-                 const TrilinosWrappers::SparseMatrix &M,
-                 const TrilinosWrappers::SparseMatrix &K,
-                 const TrilinosWrappers::MPI::Vector  &F_n,
-                 const TrilinosWrappers::MPI::Vector  &F_np1,
-                 const std::map<types::global_dof_index, double> &boundary_values_v,
-                 TrilinosWrappers::MPI::Vector        &U,
-                 TrilinosWrappers::MPI::Vector        &V) override;
+    void advance(const double                                     t_n,
+                 const double                                     dt,
+                 const TrilinosWrappers::SparseMatrix            &M,
+                 const TrilinosWrappers::SparseMatrix            &K,
+                 const TrilinosWrappers::MPI::Vector             &F_n,
+                 const TrilinosWrappers::MPI::Vector             &F_np1,
+                 const AffineConstraints<>                       &constraints_v_np1,
+                 const std::map<types::global_dof_index, double> &v_boundary_values,
+                 TrilinosWrappers::MPI::Vector                   &U,
+                 TrilinosWrappers::MPI::Vector                   &V) override;
 
 private:
     double theta;
-
-    TrilinosWrappers::SparseMatrix lhs_matrix_base;
     // Matrix on the left-hand side (M / deltat + theta A).
     TrilinosWrappers::SparseMatrix lhs_matrix;
 
