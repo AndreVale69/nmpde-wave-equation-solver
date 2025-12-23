@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.12.0)
 project(lab06 LANGUAGES CXX C)
 
-include(../common/cmake-common.cmake)
+include(cmake-common.cmake)
 
 add_executable(wave_solver src/wave_solver.cpp src/Wave.cpp)
 deal_ii_setup_target(wave_solver)
