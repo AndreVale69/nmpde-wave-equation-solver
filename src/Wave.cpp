@@ -27,16 +27,24 @@ void Wave::process_mesh_input() {
             std::filesystem::path out = p;
             out.replace_extension(".msh");
 
-            // Build gmsh command. Use -2 (2D mesh) and explicit output format
-            const std::string cmd =
-                    "gmsh -2 -format msh2 -o \"" + out.string() + "\" \"" + p.string() + "\"";
+            // Build gmsh command (force MSH 2.2 for deal.II compatibility)
+            const std::string cmd = "gmsh -2 "
+                                    "-format msh2 "
+                                    "-setnumber Mesh.MshFileVersion 2.2 "
+                                    "-o \"" +
+                                    out.string() + "\" \"" + p.string() + "\"";
 
-            const int ret = std::system(cmd.c_str());
-            AssertThrow(ret == 0,
-                        ExcMessage("Failed to run gmsh to generate mesh from .geo file: " +
-                                   mesh_file_name + ". Command executed: " + cmd +
-                                   ". If gmsh is not installed, please install it or provide a "
-                                   "mesh file in .msh format."));
+            if (mpi_rank == 0) {
+                pcout << "  Running command: " << cmd << std::endl;
+                const int ret = std::system(cmd.c_str());
+                AssertThrow(ret == 0,
+                            ExcMessage("Failed to run gmsh to generate mesh from .geo file: " +
+                                       mesh_file_name + ". Command executed: " + cmd +
+                                       ". If gmsh is not installed, please install it or provide a "
+                                       "mesh file in .msh format."));
+            }
+            // Make sure ALL ranks wait until the file is completely written
+            MPI_Barrier(MPI_COMM_WORLD);
 
             // Replace the mesh file name with the generated mesh file
             mesh_file_name = out.string();
