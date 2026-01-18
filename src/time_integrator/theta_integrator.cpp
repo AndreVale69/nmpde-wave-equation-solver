@@ -47,10 +47,9 @@ void ThetaIntegrator::advance(const double                                     t
                               const AffineConstraints<>                       &constraints_v_np1,
                               const std::map<types::global_dof_index, double> &v_boundary_values,
                               TrilinosWrappers::MPI::Vector                   &U,
-                              TrilinosWrappers::MPI::Vector                   &V)
-{
-    (void)constraints_u_np1;
-    (void)u_boundary_values;
+                              TrilinosWrappers::MPI::Vector                   &V) {
+    (void) constraints_u_np1;
+    (void) u_boundary_values;
     (void) t_n;
     (void) M;
     (void) K;
@@ -72,11 +71,11 @@ void ThetaIntegrator::advance(const double                                     t
     K.vmult(KU, U);
     rhs.add(-1.0, KU);
 
-    const unsigned int max_it = 20000;      // << prima era 5000
-    const double       rel_tol = 1e-8;      // << per output/ParaView va benissimo
+    const unsigned int max_it  = 20000; // << prima era 5000
+    const double       rel_tol = 1e-8; // << per output/ParaView va benissimo
 
     // Solve: C_LHS * V^{n+1} = rhs
-    SolverControl solver_control(max_it, rel_tol);
+    SolverControl                                              solver_control(max_it, rel_tol);
     SolverGMRES<TrilinosWrappers::MPI::Vector>::AdditionalData gmres_data;
     // Set maximum number of temporary vectors for GMRES
     gmres_data.max_n_tmp_vectors = 50;
