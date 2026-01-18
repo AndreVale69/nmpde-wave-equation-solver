@@ -62,27 +62,26 @@ else()
     # and delete or comment out the include above. Standard CMake-based builds
     # will still work with system-installed dependencies and a proper
     # environment (CMAKE_PREFIX_PATH, DEAL_II_DIR, BOOST_ROOT, etc.).
+    # Locate MPI compiler.
+    find_package(MPI REQUIRED)
+    set(CMAKE_CXX_COMPILER "${MPI_CXX_COMPILER}")
+
+    # Locate Boost.
+    find_package(Boost 1.72.0 REQUIRED
+            COMPONENTS filesystem iostreams serialization
+            HINTS ${BOOST_DIR} $ENV{BOOST_DIR} $ENV{mkBoostPrefix})
+    message(STATUS "Using the Boost-${Boost_VERSION} configuration found at ${Boost_DIR}")
+    message(STATUS)
+    include_directories(${Boost_INCLUDE_DIRS})
+
+    # Locate deal.II and initialize its variables.
+    find_package(deal.II 9.3.1 REQUIRED
+            HINTS ${DEAL_II_DIR} $ENV{DEAL_II_DIR} $ENV{mkDealiiPrefix})
+    deal_ii_initialize_cached_variables()
+
+    # Add useful compiler flags.
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wfloat-conversion -Wmissing-braces -Wnon-virtual-dtor")
 endif()
-
-# Locate MPI compiler.
-find_package(MPI REQUIRED)
-set(CMAKE_CXX_COMPILER "${MPI_CXX_COMPILER}")
-
-# Locate Boost.
-find_package(Boost 1.72.0 REQUIRED
-        COMPONENTS filesystem iostreams serialization
-        HINTS ${BOOST_DIR} $ENV{BOOST_DIR} $ENV{mkBoostPrefix})
-message(STATUS "Using the Boost-${Boost_VERSION} configuration found at ${Boost_DIR}")
-message(STATUS)
-include_directories(${Boost_INCLUDE_DIRS})
-
-# Locate deal.II and initialize its variables.
-find_package(deal.II 9.3.1 REQUIRED
-        HINTS ${DEAL_II_DIR} $ENV{DEAL_II_DIR} $ENV{mkDealiiPrefix})
-deal_ii_initialize_cached_variables()
-
-# Add useful compiler flags.
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wfloat-conversion -Wmissing-braces -Wnon-virtual-dtor")
 
 # Print current directories.
 message(STATUS "CMake source dir: ${CMAKE_SOURCE_DIR}")
