@@ -100,7 +100,20 @@ add_executable(
         src/Wave.cpp
 )
 
-
+# Include project headers.
 target_include_directories(nm4pde PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
+# Add magic_enum library (header-only).
+# https://github.com/Neargye/magic_enum/tree/v0.9.7
+add_library(magic_enum INTERFACE)
+target_include_directories(
+        magic_enum INTERFACE
+        ${PROJECT_SOURCE_DIR}/external/magic_enum-v0.9.7/include
+)
+target_link_libraries(nm4pde magic_enum)
+message(STATUS "Added magic_enum library from ${PROJECT_SOURCE_DIR}/external/magic_enum-v0.9.7/include")
+message(STATUS)
+
 deal_ii_setup_target(nm4pde)
+message(STATUS "Configured nm4pde target with deal.II")
+message(STATUS)
