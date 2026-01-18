@@ -11,8 +11,7 @@
 class NewmarkIntegrator : public TimeIntegrator {
 public:
     // Default: average acceleration (unconditionally stable)
-    explicit NewmarkIntegrator(const double beta_  = 0.25,
-                               const double gamma_ = 0.50)
+    explicit NewmarkIntegrator(const double beta_ = 0.25, const double gamma_ = 0.50)
         : beta(beta_), gamma(gamma_) {}
 
     void initialize(const TrilinosWrappers::SparseMatrix &M,
@@ -35,8 +34,8 @@ public:
                  TrilinosWrappers::MPI::Vector                   &V) override;
 
 private:
-    double beta;
-    double gamma;
+    const double beta;
+    const double gamma;
 
     bool first_step = true;
 

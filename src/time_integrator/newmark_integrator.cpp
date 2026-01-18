@@ -4,9 +4,8 @@ void NewmarkIntegrator::initialize(const TrilinosWrappers::SparseMatrix &M,
                                    const TrilinosWrappers::SparseMatrix &K,
                                    const TrilinosWrappers::MPI::Vector  &U0,
                                    const TrilinosWrappers::MPI::Vector  &V0,
-                                   const double                          dt)
-{
-    (void)V0;
+                                   const double                          dt) {
+    (void) V0;
 
     A.reinit(U0);
     A = 0.0;
@@ -32,9 +31,8 @@ void NewmarkIntegrator::advance(const double                                    
                                 const AffineConstraints<>                       &constraints_v_np1,
                                 const std::map<types::global_dof_index, double> &v_boundary_values,
                                 TrilinosWrappers::MPI::Vector                   &U,
-                                TrilinosWrappers::MPI::Vector                   &V)
-{
-    (void)t_n;
+                                TrilinosWrappers::MPI::Vector                   &V) {
+    (void) t_n;
 
     // ---- 0) If first step, compute A0 from: M A0 = F0 - K U0
     if (first_step) {
@@ -54,7 +52,8 @@ void NewmarkIntegrator::advance(const double                                    
         A0 = 0.0;
 
         TrilinosWrappers::MPI::Vector b(rhs);
-        MatrixTools::apply_boundary_values(u_boundary_values, M_sys, A0, b, /*eliminate_columns=*/false);
+        MatrixTools::apply_boundary_values(
+                u_boundary_values, M_sys, A0, b, /*eliminate_columns=*/false);
 
         SolverControl solver_control(5000, std::max(1e-12, 1e-10 * b.l2_norm()));
         SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
@@ -104,12 +103,13 @@ void NewmarkIntegrator::advance(const double                                    
     TrilinosWrappers::MPI::Vector U_new(U);
 
     // seed boundary values into initial guess
-    for (const auto &[dof, val] : u_boundary_values)
+    for (const auto &[dof, val]: u_boundary_values)
         if (U_new.locally_owned_elements().is_element(dof))
             U_new[dof] = val;
     U_new.compress(VectorOperation::insert);
 
-    MatrixTools::apply_boundary_values(u_boundary_values, A_sys, U_new, b, /*eliminate_columns=*/false);
+    MatrixTools::apply_boundary_values(
+            u_boundary_values, A_sys, U_new, b, /*eliminate_columns=*/false);
 
     SolverControl solver_control(8000, std::max(1e-12, 1e-9 * b.l2_norm()));
     SolverCG<TrilinosWrappers::MPI::Vector> solver(solver_control);
@@ -154,12 +154,12 @@ void NewmarkIntegrator::advance(const double                                    
     constraints_u_np1.distribute(U);
     constraints_v_np1.distribute(V);
 
-    for (const auto &[dof, val] : u_boundary_values)
+    for (const auto &[dof, val]: u_boundary_values)
         if (U.locally_owned_elements().is_element(dof))
             U[dof] = val;
     U.compress(VectorOperation::insert);
 
-    for (const auto &[dof, val] : v_boundary_values)
+    for (const auto &[dof, val]: v_boundary_values)
         if (V.locally_owned_elements().is_element(dof))
             V[dof] = val;
     V.compress(VectorOperation::insert);
