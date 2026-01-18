@@ -8,7 +8,9 @@
  */
 #ifndef NM4PDE_BOUNDARY_TYPE_HPP
 #define NM4PDE_BOUNDARY_TYPE_HPP
-#include <stdexcept>
+
+#include <magic_enum/magic_enum.hpp>
+#include <string>
 
 /**
  * @brief Enumeration for different types of problems.
@@ -21,16 +23,10 @@ enum class BoundaryType : char { Zero, MMS, Expr };
  * @return Corresponding string representation.
  */
 inline std::string to_string(const BoundaryType boundary_type) {
-    switch (boundary_type) {
-        case BoundaryType::Zero:
-            return "zero";
-        case BoundaryType::MMS:
-            return "mms";
-        case BoundaryType::Expr:
-            return "expr";
-        default:
-            return "unknown";
-    }
+    const std::string_view name = magic_enum::enum_name(boundary_type);
+    AssertThrow(!name.empty(),
+                dealii::ExcMessage("Invalid BoundaryType value (out of enum domain)."));
+    return std::string(name);
 }
 
 /**
@@ -40,13 +36,9 @@ inline std::string to_string(const BoundaryType boundary_type) {
  * @throws std::invalid_argument if the string does not match any known type.
  */
 inline BoundaryType boundary_type_from_string(const std::string &s) {
-    if (s == "zero")
-        return BoundaryType::Zero;
-    if (s == "mms")
-        return BoundaryType::MMS;
-    if (s == "expr")
-        return BoundaryType::Expr;
-    throw std::invalid_argument("Invalid BoundaryType string: " + s);
+    const auto boundary_type = magic_enum::enum_cast<BoundaryType>(s);
+    AssertThrow(boundary_type.has_value(), dealii::ExcMessage("Invalid BoundaryType string: " + s));
+    return boundary_type.value();
 }
 
 /**
@@ -55,7 +47,7 @@ inline BoundaryType boundary_type_from_string(const std::string &s) {
  * @param boundary_type BoundaryType enum value.
  * @return Reference to the output stream.
  */
-inline std::ostream &operator<<(std::ostream &os, BoundaryType boundary_type) {
+inline std::ostream &operator<<(std::ostream &os, const BoundaryType boundary_type) {
     os << to_string(boundary_type);
     return os;
 }

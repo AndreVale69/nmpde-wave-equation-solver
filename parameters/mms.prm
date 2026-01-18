@@ -1,12 +1,12 @@
 subsection Problem
-  set type = mms
+  set type = MMS
   set u_exact_expr = sin(pi*x)*sin(pi*y)*cos(1.0*t)
   set v_exact_expr = -1.0*sin(pi*x)*sin(pi*y)*sin(1.0*t)
   set f_exact_expr = (2*pi^2 - 1.0^2)*sin(pi*x)*sin(pi*y)*cos(1.0*t)
 end
 
 subsection Boundary condition
-  set type = zero
+  set type = Zero
 end
 
 subsection Mesh
@@ -18,7 +18,7 @@ subsection Time
   set T      = 1.0
   set dt     = 0.01
   set theta  = 0.5
-  set scheme = theta
+  set scheme = Theta
 end
 
 subsection Output

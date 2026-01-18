@@ -18,7 +18,7 @@ from tkinter import ttk, filedialog, messagebox
 
 DEFAULTS = {
     "Problem": {
-        "type": "physical",
+        "type": "Physical",
         "u_exact_expr": "<manufactured_u0_expr>",
         "v_exact_expr": "<manufactured_v0_expr>",
         "f_exact_expr": "<manufactured_f_expr>",
@@ -28,7 +28,7 @@ DEFAULTS = {
         "mu_expr": "1",
     },
     "Boundary condition": {
-        "type": "zero",
+        "type": "Zero",
         "g_expr": "0",
         "v_expr": "0",
     },
@@ -40,13 +40,13 @@ DEFAULTS = {
         "T": "1.0",
         "dt": "0.01",
         "theta": "1.0",
-        "scheme": "theta",
+        "scheme": "Theta",
     },
     "Output": {
         "every": "1",
         "compute_error": False,
         "convergence_study": False,
-        "convergence_type": "time",
+        "convergence_type": "Time",
         "convergence_csv": "",
         "error_file": "build/error_history.csv",
         "vtk_directory": "build",
@@ -56,27 +56,27 @@ DEFAULTS = {
 
 # Predefined choice lists and help texts for specific parameters
 CHOICES = {
-    ("Problem", "type"): ["physical", "mms", "expr"],
-    ("Boundary condition", "type"): ["zero", "mms", "expr"],
-    ("Time", "scheme"): ["theta", "centraldifference", "newmark"],
-    ("Output", "convergence_type"): ["time", "space"],
+    ("Problem", "type"): ["Physical", "MMS", "Expr"],
+    ("Boundary condition", "type"): ["Zero", "MMS", "Expr"],
+    ("Time", "scheme"): ["Theta", "CentralDifference", "Newmark"],
+    ("Output", "convergence_type"): ["Time", "Space"],
 }
 
 HELP = {
     # Problem
-    ("Problem", "type"): "Choose problem type: 'physical' runs the physical problem; 'mms' uses the manufactured solution (useful for error checks); 'expr' lets you provide expressions for initial/forcing terms.",
+    ("Problem", "type"): "Choose problem type: 'Physical' runs the physical problem; 'MMS' uses the manufactured solution (useful for error checks); 'Expr' lets you provide expressions for initial/forcing terms.",
     ("Problem", "u_exact_expr"): "Exact initial displacement expression (used for MMS). Provide a function of x,y,t matching the manufactured solution at t=0.",
     ("Problem", "v_exact_expr"): "Exact initial velocity expression (used for MMS). Provide du_ex/dt at t=0 if using MMS.",
     ("Problem", "f_exact_expr"): "Exact forcing term (used for MMS). For MMS tests this is the analytic RHS matching the manufactured solution.",
-    ("Problem", "u0_expr"): "Initial displacement expression for 'expr' problems. Use variables x,y,t and math functions (e.g., 'sin(pi*x)').",
-    ("Problem", "v0_expr"): "Initial velocity expression for 'expr' problems. Use x,y,t if needed.",
-    ("Problem", "f_expr"): "Forcing term expression for 'expr' problems. Use 0 for no forcing.",
+    ("Problem", "u0_expr"): "Initial displacement expression for 'Expr' problems. Use variables x,y,t and math functions (e.g., 'sin(pi*x)').",
+    ("Problem", "v0_expr"): "Initial velocity expression for 'Expr' problems. Use x,y,t if needed.",
+    ("Problem", "f_expr"): "Forcing term expression for 'Expr' problems. Use 0 for no forcing.",
     ("Problem", "mu_expr"): "Coefficient mu(x,y,t) used in the PDE (default 1). You can enter spatially varying coefficients as an expression.",
 
     # Boundary condition
-    ("Boundary condition", "type"): "Boundary type: 'zero' imposes homogeneous Dirichlet; 'mms' uses manufactured boundary values; 'expr' uses the provided g_expr and v_expr expressions.",
-    ("Boundary condition", "g_expr"): "Dirichlet boundary expression for displacement u(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured solution (Problem.u_exact_expr), so no need to set manually.",
-    ("Boundary condition", "v_expr"): "Dirichlet boundary expression for velocity v(x,y,t). Required if boundary type is 'expr'. If using MMS, this is taken from the manufactured velocity (Problem.v_exact_expr), so no need to set manually.",
+    ("Boundary condition", "type"): "Boundary type: 'Zero' imposes homogeneous Dirichlet; 'MMS' uses manufactured boundary values; 'Expr' uses the provided g_expr and v_expr expressions.",
+    ("Boundary condition", "g_expr"): "Dirichlet boundary expression for displacement u(x,y,t). Required if boundary type is 'Expr'. If using MMS, this is taken from the manufactured solution (Problem.u_exact_expr), so no need to set manually.",
+    ("Boundary condition", "v_expr"): "Dirichlet boundary expression for velocity v(x,y,t). Required if boundary type is 'Expr'. If using MMS, this is taken from the manufactured velocity (Problem.v_exact_expr), so no need to set manually.",
 
     # Mesh
     ("Mesh", "mesh_file"): "Path to the mesh file (.geo or .msh). Use the picker to select an existing mesh in the 'mesh' folder.",
@@ -86,13 +86,13 @@ HELP = {
     ("Time", "T"): "Final time of the simulation (real number). The simulation runs from t=0 to t=T.",
     ("Time", "dt"): "Time step size. Choose dt small enough for stability and accuracy (depends on scheme and mesh).",
     ("Time", "theta"): "Theta parameter for the theta scheme: 0 explicit, 0.5 Crank-Nicolson, 1 implicit/backward Euler.",
-    ("Time", "scheme"): "Time integration scheme: 'theta' (general theta method), 'centraldifference', or 'newmark'.",
+    ("Time", "scheme"): "Time integration scheme: 'Theta' (general theta method), 'CentralDifference', or 'Newmark'.",
 
     # Output
     ("Output", "every"): "Write VTK output every N time steps (integer). Set to 1 to write every step.",
     ("Output", "compute_error"): "When true (and problem type is MMS) the code computes and saves the error history to CSV.",
     ("Output", "convergence_study"): "Enable convergence study (ONLY for MMS). If enabled, you must choose a convergence type (time/space).",
-    ("Output", "convergence_type"): "Convergence study type: 'time' runs dt-refinement studies; 'space' runs mesh-refinement studies. Used only if convergence_study is enabled.",
+    ("Output", "convergence_type"): "Convergence study type: 'Time' runs dt-refinement studies; 'Space' runs mesh-refinement studies. Used only if convergence_study is enabled.",
     ("Output", "convergence_csv"): "Optional path to a CSV file where the convergence table will be saved. Enabled only when convergence_study is true (and Problem.type is MMS). Leave empty to disable CSV output.",
     ("Output", "error_file"): "Path to the CSV file where the error history will be saved. Enabled only if compute_error is true.",
     ("Output", "vtk_directory"): "Directory where VTK (.vtu/.pvtu) output files will be written. Use the picker to choose an output folder.",
@@ -363,17 +363,17 @@ class PrmGUI(tk.Tk):
         """Enable/disable widgets based on dependency rules.
 
         Rules implemented:
-        - Problem.type: 'mms' -> enable exact_* fields, disable expr fields; 'expr' -> enable expr fields, disable exact; 'physical' -> disable both groups.
-        - Boundary condition.type: 'expr' -> enable g_expr and v_expr; otherwise disable them.
+        - Problem.type: 'MMS' -> enable exact_* fields, disable expr fields; 'Expr' -> enable expr fields, disable exact; 'Physical' -> disable both groups.
+        - Boundary condition.type: 'Expr' -> enable g_expr and v_expr; otherwise disable them.
         - Output.compute_error: when false -> disable error_file, when true -> enable.
-        - Output.convergence_study: only enabled when Problem.type == 'mms'; when enabled -> enable convergence_type, else disable.
-        - Output.convergence_csv: only enabled when Problem.type == 'mms' and Output.convergence_study is true.
+        - Output.convergence_study: only enabled when Problem.type == 'MMS'; when enabled -> enable convergence_type, else disable.
+        - Output.convergence_csv: only enabled when Problem.type == 'MMS' and Output.convergence_study is true.
         """
         # Problem.type rules
         try:
             ptype = self.vars["Problem"]["type"]["var"].get().strip().lower()
         except Exception:
-            ptype = "physical"
+            ptype = "Physical"
 
         exact_keys = ["u_exact_expr", "v_exact_expr", "f_exact_expr"]
         expr_keys = ["u0_expr", "v0_expr", "f_expr"]
@@ -381,7 +381,7 @@ class PrmGUI(tk.Tk):
         for k in exact_keys:
             widget = self.vars["Problem"][k]["widget"]
             try:
-                if ptype == "mms":
+                if ptype == "MMS":
                     widget.configure(state="normal")
                 else:
                     widget.configure(state="disabled")
@@ -391,7 +391,7 @@ class PrmGUI(tk.Tk):
         for k in expr_keys:
             widget = self.vars["Problem"][k]["widget"]
             try:
-                if ptype == "expr":
+                if ptype == "Expr":
                     widget.configure(state="normal")
                 else:
                     widget.configure(state="disabled")
@@ -402,12 +402,12 @@ class PrmGUI(tk.Tk):
         try:
             btype = self.vars["Boundary condition"]["type"]["var"].get().strip().lower()
         except Exception:
-            btype = "zero"
+            btype = "Zero"
 
         for key in ("g_expr", "v_expr"):
             widget = self.vars["Boundary condition"][key]["widget"]
             try:
-                if btype == "expr":
+                if btype == "Expr":
                     widget.configure(state="normal")
                 else:
                     widget.configure(state="disabled")
@@ -437,7 +437,7 @@ class PrmGUI(tk.Tk):
         # convergence_study checkbox itself should only be interactive in MMS mode
         conv_chk = self.vars["Output"]["convergence_study"]["widget"]
         try:
-            if ptype == "mms":
+            if ptype == "MMS":
                 conv_chk.configure(state="normal")
             else:
                 conv_chk.configure(state="disabled")
@@ -450,7 +450,7 @@ class PrmGUI(tk.Tk):
 
         conv_type_widget = self.vars["Output"]["convergence_type"]["widget"]
         try:
-            if ptype == "mms" and conv_enabled:
+            if ptype == "MMS" and conv_enabled:
                 conv_type_widget.configure(state="readonly")
             else:
                 conv_type_widget.configure(state="disabled")
@@ -460,7 +460,7 @@ class PrmGUI(tk.Tk):
         # Output.convergence_csv rules
         try:
             conv_csv_widget = self.vars["Output"]["convergence_csv"]["widget"]
-            if ptype == "mms" and conv_enabled:
+            if ptype == "MMS" and conv_enabled:
                 conv_csv_widget.configure(state="normal")
             else:
                 conv_csv_widget.configure(state="disabled")
@@ -473,18 +473,18 @@ class PrmGUI(tk.Tk):
     def validate_before_save(self, params: dict):
         """Return (ok, message). Validate required fields based on rules."""
         # Problem type
-        ptype = params.get("Problem", {}).get("type", "physical").strip().lower()
-        if ptype == "mms":
+        ptype = params.get("Problem", {}).get("type", "Physical").strip().lower()
+        if ptype == "MMS":
             for k in ("u_exact_expr", "v_exact_expr", "f_exact_expr"):
                 if not params.get("Problem", {}).get(k):
                     return False, f"Missing required Problem parameter: {k} for MMS type"
-        if ptype == "expr":
+        if ptype == "Expr":
             for k in ("u0_expr", "v0_expr", "f_expr"):
                 if not params.get("Problem", {}).get(k):
                     return False, f"Missing required Problem parameter: {k} for Expr type"
 
-        btype = params.get("Boundary condition", {}).get("type", "zero").strip().lower()
-        if btype == "expr":
+        btype = params.get("Boundary condition", {}).get("type", "Zero").strip().lower()
+        if btype == "Expr":
             for k in ("g_expr", "v_expr"):
                 if not params.get("Boundary condition", {}).get(k):
                     return False, f"Missing required Boundary condition parameter: {k} for Expr type"
@@ -496,11 +496,11 @@ class PrmGUI(tk.Tk):
         # convergence study validation
         conv = params.get("Output", {}).get("convergence_study")
         if conv in (True, "true", "True"):
-            if ptype != "mms":
-                return False, "Output.convergence_study can only be enabled when Problem.type is 'mms'"
+            if ptype != "MMS":
+                return False, "Output.convergence_study can only be enabled when Problem.type is 'MMS'"
             ctype = str(params.get("Output", {}).get("convergence_type", "")).strip().lower()
-            if ctype not in ("time", "space"):
-                return False, "Missing/invalid Output.convergence_type (must be 'time' or 'space') when convergence_study is enabled"
+            if ctype not in ("Time", "Space"):
+                return False, "Missing/invalid Output.convergence_type (must be 'Time' or 'Space') when convergence_study is enabled"
         else:
             # if convergence is disabled, the csv path must not be set
             if params.get("Output", {}).get("convergence_csv"):

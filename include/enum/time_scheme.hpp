@@ -1,8 +1,7 @@
 #ifndef NM4PDE_TIME_SCHEME_HPP
 #define NM4PDE_TIME_SCHEME_HPP
 
-#include <ostream>
-#include <stdexcept>
+#include <magic_enum/magic_enum.hpp>
 #include <string>
 
 /**
@@ -16,16 +15,10 @@ enum class TimeScheme : char { Theta, CentralDifference, Newmark };
  * @return Corresponding string representation.
  */
 inline std::string to_string(const TimeScheme scheme) {
-    switch (scheme) {
-        case TimeScheme::Theta:
-            return "theta";
-        case TimeScheme::CentralDifference:
-            return "central";
-        case TimeScheme::Newmark:
-            return "newmark";
-        default:
-            return "unknown";
-    }
+    const std::string_view name = magic_enum::enum_name(scheme);
+    AssertThrow(!name.empty(),
+                dealii::ExcMessage("Invalid TimeScheme value (out of enum domain)."));
+    return std::string(name);
 }
 
 /**
@@ -35,13 +28,9 @@ inline std::string to_string(const TimeScheme scheme) {
  * @throws std::invalid_argument if the string does not match any known scheme.
  */
 inline TimeScheme time_scheme_from_string(const std::string &s) {
-    if (s == "theta")
-        return TimeScheme::Theta;
-    if (s == "central")
-        return TimeScheme::CentralDifference;
-    if (s == "newmark")
-        return TimeScheme::Newmark;
-    throw std::invalid_argument("Invalid TimeScheme string: " + s);
+    const auto scheme = magic_enum::enum_cast<TimeScheme>(s);
+    AssertThrow(scheme.has_value(), dealii::ExcMessage("Invalid TimeScheme string: " + s));
+    return scheme.value();
 }
 
 /**
@@ -50,7 +39,7 @@ inline TimeScheme time_scheme_from_string(const std::string &s) {
  * @param scheme TimeScheme enum value.
  * @return Reference to the output stream.
  */
-inline std::ostream &operator<<(std::ostream &os, TimeScheme scheme) {
+inline std::ostream &operator<<(std::ostream &os, const TimeScheme scheme) {
     os << to_string(scheme);
     return os;
 }
