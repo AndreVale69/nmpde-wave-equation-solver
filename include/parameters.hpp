@@ -229,8 +229,8 @@ struct Parameters {
      * @brief Initialize the problem functions (mu, forcing term, initial conditions).
      * @tparam dim Spatial dimension.
      * @param mu FunctionParser for the mu coefficient.
-     * @param boundary_g FunctionParser for the boundary condition g.
-     * @param boundary_v FunctionParser for the boundary condition for the velocity.
+     * @param boundary_g Function for the boundary condition g.
+     * @param boundary_v Function for the boundary condition for the velocity.
      * @param forcing_term FunctionParser for the forcing term.
      * @param u_0 FunctionParser for the initial displacement.
      * @param v_0 FunctionParser for the initial velocity.
