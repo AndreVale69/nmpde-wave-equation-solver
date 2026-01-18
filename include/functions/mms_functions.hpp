@@ -34,12 +34,12 @@ public:
      * The expression is of the form:
      * sin(pi*x)*sin(pi*y)*cos(omega*t)
      */
-    std::string get_expression() const {
+    [[nodiscard]] std::string get_expression() const {
         return "sin(pi*x)*sin(pi*y)*cos(" + std::to_string(omega) + "*t)";
     }
 
 private:
-    double omega;
+    const double omega;
 };
 
 /**
@@ -64,13 +64,13 @@ public:
      * The expression is of the form:
      * -omega*sin(pi*x)*sin(pi*y)*sin(omega*t)
      */
-    std::string get_expression() const {
+    [[nodiscard]] std::string get_expression() const {
         return "-" + std::to_string(omega) + "*sin(pi*x)*sin(pi*y)*sin(" + std::to_string(omega) +
                "*t)";
     }
 
 private:
-    double omega;
+    const double omega;
 };
 
 /**
@@ -96,13 +96,13 @@ public:
      * The expression is of the form:
      * (2*pi^2 - omega^2)*sin(pi*x)*sin(pi*y)*cos(omega*t)
      */
-    std::string get_expression() const {
+    [[nodiscard]] std::string get_expression() const {
         return "(" + std::to_string(2.0 * numbers::PI * numbers::PI - omega * omega) +
                ")*sin(pi*x)*sin(pi*y)*cos(" + std::to_string(omega) + "*t)";
     }
 
 private:
-    double omega;
+    const double omega;
 };
 
 #endif // NM4PDE_MMS_FUNCTIONS_HPP
