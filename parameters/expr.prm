@@ -1,5 +1,5 @@
 subsection Problem
-  set type        = expr
+  set type        = Expr
   set u0_expr     = sin(pi*x)*sin(pi*y)
   set v0_expr     = 0
   set mu_expr     = 0
@@ -7,7 +7,7 @@ subsection Problem
 end
 
 subsection Boundary condition
-  set type = zero
+  set type = Zero
 end
 
 subsection Mesh
@@ -19,7 +19,7 @@ subsection Time
   set T      = 1.0
   set dt     = 0.01
   set theta  = 1.0
-  set scheme = theta
+  set scheme = Theta
 end
 
 subsection Output

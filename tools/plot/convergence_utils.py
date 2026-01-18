@@ -29,8 +29,8 @@ import pandas as pd
 
 
 class ConvergenceKind(str, Enum):
-    SPACE = "space"
-    TIME = "time"
+    SPACE = "Space"
+    TIME = "Time"
 
 
 @dataclass(frozen=True)

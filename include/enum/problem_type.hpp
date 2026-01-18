@@ -8,7 +8,9 @@
  */
 #ifndef NM4PDE_PROBLEM_TYPE_HPP
 #define NM4PDE_PROBLEM_TYPE_HPP
-#include <stdexcept>
+
+#include <magic_enum/magic_enum.hpp>
+#include <string>
 
 /**
  * @brief Enumeration of available problem types.
@@ -21,16 +23,10 @@ enum class ProblemType : char { Physical, MMS, Expr };
  * @return Corresponding string representation.
  */
 inline std::string to_string(const ProblemType problem_type) {
-    switch (problem_type) {
-        case ProblemType::Physical:
-            return "physical";
-        case ProblemType::MMS:
-            return "mms";
-        case ProblemType::Expr:
-            return "expr";
-        default:
-            return "unknown";
-    }
+    const std::string_view name = magic_enum::enum_name(problem_type);
+    AssertThrow(!name.empty(),
+                dealii::ExcMessage("Invalid ProblemType value (out of enum domain)."));
+    return std::string(name);
 }
 
 /**
@@ -40,13 +36,9 @@ inline std::string to_string(const ProblemType problem_type) {
  * @throws std::invalid_argument if the string does not match any known type.
  */
 inline ProblemType problem_type_from_string(const std::string &s) {
-    if (s == "physical")
-        return ProblemType::Physical;
-    if (s == "mms")
-        return ProblemType::MMS;
-    if (s == "expr")
-        return ProblemType::Expr;
-    throw std::invalid_argument("Invalid ProblemType string: " + s);
+    const auto problem_type = magic_enum::enum_cast<ProblemType>(s);
+    AssertThrow(problem_type.has_value(), dealii::ExcMessage("Invalid ProblemType string: " + s));
+    return problem_type.value();
 }
 
 /**
@@ -55,7 +47,7 @@ inline ProblemType problem_type_from_string(const std::string &s) {
  * @param problem_type ProblemType enum value.
  * @return Reference to the output stream.
  */
-inline std::ostream &operator<<(std::ostream &os, ProblemType problem_type) {
+inline std::ostream &operator<<(std::ostream &os, const ProblemType problem_type) {
     os << to_string(problem_type);
     return os;
 }

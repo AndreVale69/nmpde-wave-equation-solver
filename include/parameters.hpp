@@ -431,12 +431,14 @@ private:
     void declare() {
         prm.enter_subsection("Problem");
         {
-            prm.declare_entry(
-                    "type",
-                    "physical",
-                    Patterns::Selection(kSelectionProblemType),
-                    "Type of problem to solve: 'physical' for physical problem, "
-                    "'mms' for manufactured solution, 'expr' for expression-based problem.");
+            prm.declare_entry("type",
+                              to_string(ProblemType::Physical),
+                              Patterns::Selection(kSelectionProblemType),
+                              "Type of problem to solve: '" + to_string(ProblemType::Physical) +
+                                      "' for physical problem, '" + to_string(ProblemType::MMS) +
+                                      "' for manufactured solution, '" +
+                                      to_string(ProblemType::Expr) +
+                                      "' for expression-based problem.");
 
             // MMS-based problem entries
             prm.declare_entry("u_exact_expr",
@@ -480,9 +482,10 @@ private:
                     "type",
                     to_string(BoundaryType::Zero),
                     Patterns::Selection(kBoundaryConditionType),
-                    "Type of boundary condition to apply: 'zero' for homogeneous Dirichlet, "
-                    "'mms' for manufactured solution, 'expr' for expression-based boundary "
-                    "condition.");
+                    "Type of boundary condition to apply: '" + to_string(BoundaryType::Zero) +
+                            "' for homogeneous Dirichlet, '" + to_string(BoundaryType::MMS) +
+                            "' for manufactured solution, '" + to_string(BoundaryType::Expr) +
+                            "' for expression-based boundary condition.");
             prm.declare_entry("g_expr",
                               "0",
                               Patterns::Anything(),
@@ -687,8 +690,9 @@ private:
             if (output.convergence_type != ConvergenceType::Time &&
                 output.convergence_type != ConvergenceType::Space) {
                 throw std::runtime_error(
-                        "Invalid convergence_type while convergence_study is enabled. "
-                        "Expected 'time' or 'space'.");
+                        "Invalid convergence_type while convergence_study is enabled. Expected '" +
+                        to_string(ConvergenceType::Time) + "' or '" +
+                        to_string(ConvergenceType::Space) + "'.");
             }
         }
 

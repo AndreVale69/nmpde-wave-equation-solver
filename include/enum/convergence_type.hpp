@@ -9,8 +9,7 @@
 #ifndef NM4PDE_CONVERGENCE_TYPE_HPP
 #define NM4PDE_CONVERGENCE_TYPE_HPP
 
-#include <ostream>
-#include <stdexcept>
+#include <magic_enum/magic_enum.hpp>
 #include <string>
 
 /**
@@ -24,14 +23,10 @@ enum class ConvergenceType : char { Time, Space };
  * @return Corresponding string representation.
  */
 inline std::string to_string(const ConvergenceType conv_type) {
-    switch (conv_type) {
-        case ConvergenceType::Time:
-            return "time";
-        case ConvergenceType::Space:
-            return "space";
-        default:
-            return "unknown";
-    }
+    const std::string_view name = magic_enum::enum_name(conv_type);
+    AssertThrow(!name.empty(),
+                dealii::ExcMessage("Invalid ConvergenceType value (out of enum domain)."));
+    return std::string(name);
 }
 
 /**
@@ -41,11 +36,9 @@ inline std::string to_string(const ConvergenceType conv_type) {
  * @throws std::invalid_argument if the string does not match any known type.
  */
 inline ConvergenceType convergence_type_from_string(const std::string &s) {
-    if (s == "time")
-        return ConvergenceType::Time;
-    if (s == "space")
-        return ConvergenceType::Space;
-    throw std::invalid_argument("Invalid ConvergenceType string: " + s);
+    const auto conv_type = magic_enum::enum_cast<ConvergenceType>(s);
+    AssertThrow(conv_type.has_value(), dealii::ExcMessage("Invalid ConvergenceType string: " + s));
+    return conv_type.value();
 }
 
 /**

@@ -51,12 +51,12 @@ def _ensure_upload_cache():
 def _ingest_uploads(uploaded_files, *, target: str):
     """Read uploaded files and persist them in session_state.
 
-    target: 'mms' or 'conv'
+    target: 'MMS' or 'conv'
     """
     if uploaded_files is None:
         return
 
-    key = "uploads_mms" if target == "mms" else "uploads_conv"
+    key = "uploads_mms" if target == "MMS" else "uploads_conv"
 
     for f in uploaded_files:
         try:
@@ -165,7 +165,7 @@ if mode == "Convergence":
     )
 
     active = [df for df in conv_dfs if df["__kind"].iloc[0] == selected_kind]
-    xcol = "h" if selected_kind == "space" else "dt"
+    xcol = "h" if selected_kind == "Space" else "dt"
 
     st.sidebar.markdown("---")
     metrics = ["u_L2", "u_H1", "v_L2"]
@@ -217,7 +217,7 @@ if mode == "Convergence":
         run_name = df.get("__name", pd.Series(["run"])).iloc[0]
         with st.expander(f"{run_name} ({xcol} rows: {len(df)})", expanded=False):
             order_cols = (
-                ["p_uL2", "p_uH1", "p_vL2"] if selected_kind == "space" else ["q_uL2", "q_uH1", "q_vL2"]
+                ["p_uL2", "p_uH1", "p_vL2"] if selected_kind == "Space" else ["q_uL2", "q_uH1", "q_vL2"]
             )
             cols = [xcol] + selected_metrics + [c for c in order_cols if c in df.columns]
             if "mesh" in df.columns:
@@ -274,7 +274,7 @@ def _coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
                 # leave column unchanged if conversion fails
                 pass
             continue
-        if c in {"time", "t"} or any(
+        if c in {"Time", "t"} or any(
             c.startswith(p)
             for p in (
                 "error_",
@@ -327,8 +327,8 @@ def _ensure_canonical_schema(df: pd.DataFrame) -> pd.DataFrame:
             df[new] = df[old]
 
     # common legacy column name
-    if "t" in df.columns and "time" not in df.columns:
-        df = df.rename(columns={"t": "time"})
+    if "t" in df.columns and "Time" not in df.columns:
+        df = df.rename(columns={"t": "Time"})
 
     return df
 
@@ -403,7 +403,7 @@ uploaded = st.file_uploader(
     key="uploader_mms",
 )
 
-_ingest_uploads(uploaded, target="mms")
+_ingest_uploads(uploaded, target="MMS")
 
 if not st.session_state["uploads_mms"]:
     st.info("Upload one or more CSV files to get started.")
@@ -458,14 +458,14 @@ if not selected:
 
 # required x-axis
 for name in selected:
-    if "time" not in datasets[name].columns and "step" not in datasets[name].columns:
+    if "Time" not in datasets[name].columns and "step" not in datasets[name].columns:
         st.error(f"File {name} must contain a `time` or `step` column.")
         st.stop()
 
 # Decide x-axis (time preferred)
-x_axis = st.sidebar.selectbox("X axis", options=["time", "step"], index=0)
+x_axis = st.sidebar.selectbox("X axis", options=["Time", "step"], index=0)
 # If any selected file lacks time, fall back to step automatically.
-if x_axis == "time" and any("time" not in datasets[n].columns for n in selected):
+if x_axis == "Time" and any("Time" not in datasets[n].columns for n in selected):
     x_axis = "step"
     st.sidebar.info("Some files are missing `time`; using `step` on the x-axis.")
 
@@ -600,8 +600,8 @@ def _get_x(df: pd.DataFrame, x_axis: str):
     if x_axis in df.columns:
         return df[x_axis]
     # fallback
-    if "time" in df.columns:
-        return df["time"]
+    if "Time" in df.columns:
+        return df["Time"]
     return df.index
 
 

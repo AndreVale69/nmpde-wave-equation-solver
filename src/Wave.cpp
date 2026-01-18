@@ -169,7 +169,6 @@ void Wave::setup() {
         default:
             AssertThrow(false, ExcMessage("Unknown time scheme"));
     }
-
 }
 
 void Wave::solve() {
@@ -368,7 +367,9 @@ void Wave::do_solve() {
             if (u0_l2 == 0.0 && v0_l2 == 0.0) {
                 pcout << "[Hint] Both u0 and v0 are exactly zero after applying Dirichlet BCs, "
                          "so the discrete energy E0 will be 0 and E/E0 is undefined. "
-                         "If you want a nonzero energy, use Problem type 'expr' (u0_expr/v0_expr) "
+                         "If you want a nonzero energy, use Problem type '"
+                      << ProblemType::Expr
+                      << "' (u0_expr/v0_expr) "
                          "or provide physical initial conditions."
                       << std::endl;
             }
@@ -479,23 +480,22 @@ void Wave::do_solve() {
                 boundary_g->set_time(t_np1);
                 for (const auto id: boundary_ids)
                     VectorTools::interpolate_boundary_values(
-                        dof_handler, id, *boundary_g, u_boundary_values);
-
+                            dof_handler, id, *boundary_g, u_boundary_values);
 
 
                 // 4. Advance the solution to time step n+1
                 time_integrator->advance(t_n,
-                         deltat,
-                         mass_matrix,
-                         stiffness_matrix,
-                         forcing_n,
-                         forcing_np1,
-                         constraints_u_np1,
-                         u_boundary_values,
-                         constraints_v_np1,
-                         v_boundary_values,
-                         solution_owned,
-                         velocity_owned);
+                                         deltat,
+                                         mass_matrix,
+                                         stiffness_matrix,
+                                         forcing_n,
+                                         forcing_np1,
+                                         constraints_u_np1,
+                                         u_boundary_values,
+                                         constraints_v_np1,
+                                         v_boundary_values,
+                                         solution_owned,
+                                         velocity_owned);
 
 
                 // 5. Apply Dirichlet constraints to the solution and velocity at time step n+1
