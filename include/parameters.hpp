@@ -13,7 +13,6 @@
 #include "enum/problem_type.hpp"
 #include "enum/time_scheme.hpp"
 #include "functions/problem_functions.hpp"
-#include "utils/conditional_o_stream_wrapper.hpp"
 
 /**
  * @brief Structure to hold simulation parameters.
@@ -368,7 +367,7 @@ private:
     /**
      * @brief Parallel output stream.
      */
-    ConditionalOStreamWrapper pcout;
+    ConditionalOStream pcout;
 
     /**
      * @brief Internal ParameterHandler instance.

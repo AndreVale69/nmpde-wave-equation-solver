@@ -40,7 +40,6 @@
 #include "functions/mms_functions.hpp"
 #include "parameters.hpp"
 #include "time_integrator/time_integrator.hpp"
-#include "utils/conditional_o_stream_wrapper.hpp"
 
 using namespace dealii;
 
@@ -224,7 +223,7 @@ protected:
     const unsigned int mpi_rank;
 
     // Parallel output stream.
-    ConditionalOStreamWrapper pcout;
+    ConditionalOStream pcout;
 
     // Problem definition. ///////////////////////////////////////////////////////
 
