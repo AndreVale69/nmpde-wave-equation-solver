@@ -46,6 +46,8 @@ build/*
 
 # generated meshes
 *.msh
+*.vtu
+*.pvtu
 
 # python cache
 __pycache__/
