@@ -743,7 +743,8 @@ private:
                     }
 
                     if (output.convergence_study) {
-                        pcout << "Convergence type (time/space) ["
+                        pcout << "Convergence type (" << ConvergenceType::Time << "/"
+                              << ConvergenceType::Space << ") ["
                               << to_string(output.convergence_type) << "] : ";
                         std::string conv_type;
                         std::getline(std::cin, conv_type);
