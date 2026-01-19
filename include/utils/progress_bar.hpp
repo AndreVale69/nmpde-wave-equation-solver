@@ -2,7 +2,7 @@
  * @file progress_bar.hpp
  * @brief A simple ASCII progress bar for long-running loops. Inspired by Python's tqdm.
  * @author Andrea Valentini
- * @date June 2024
+ * @date October 2025
  * @license MIT
  * @details
  * This class provides a simple ASCII progress bar for tracking the progress of
@@ -55,13 +55,22 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <deque>
 #include <functional>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
+#ifdef _WIN32
+#include <io.h> // _isatty, _fileno
+#define isatty _isatty
+#define fileno _fileno
+#else // #ifdef _WIN32
+#include <unistd.h> // isatty
+#endif // #ifdef _WIN32 #else
 
 /**
  * @brief A simple ASCII progress bar for long-running loops using deal.II's ConditionalOStream and
@@ -84,20 +93,28 @@ public:
      *                  For example, a value of 8 averages the last 8 steps.
      * @param smooth Whether to use smooth Unicode characters for the progress bar.
      *               If false, ASCII characters are used.
+     * @param enabled Whether the progress bar is enabled at construction. When disabled,
+     *                no output is produced.
      * @details
      * This constructor creates a ProgressBar with the specified total steps. If total_steps
      * is 0, the progress bar operates in "unknown total" mode, similar to Python's tqdm,
      * displaying a spinner instead of a percentage bar. The output is directed to the
      * provided ConditionalOStream or a new one created for the given MPI communicator.
      * The bar width, smoothing window size, and character style can be customized.
+     *
+     * Note: If stdout is not a TTY (TeleTYpewriter, i.e., a terminal), carriage return
+     * updates are disabled to avoid garbled output in non-interactive environments.
+     * Additionally, if the progress bar is disabled, no output will be produced (no overhead).
      */
     explicit ProgressBar(const unsigned int  total_steps  = 0,
                          const MPI_Comm      comm         = MPI_COMM_WORLD,
                          ConditionalOStream *external_out = nullptr,
                          const unsigned int  bar_width    = 30,
                          const unsigned int  smoothing    = 8,
-                         const bool          smooth       = true)
-        : total_steps(total_steps)
+                         const bool          smooth       = true,
+                         const bool          enabled      = true)
+        : enabled(enabled)
+        , total_steps(total_steps)
         , bar_width(bar_width)
         , smoothing(smoothing)
         , smooth_unicode(smooth)
@@ -114,6 +131,10 @@ public:
             out_ptr  = owned_out.get();
             owns_out = true;
         }
+        // If stdout is not a TTY (TeleTYpewriter, i.e., a terminal), disable CR updates
+        interactive_output = isatty(fileno(stdout)) != 0;
+        // Set the appropriate dispatch functions based on total_steps and enabled state
+        update_dispatch();
     }
 
     /**
@@ -203,65 +224,7 @@ public:
                    const unsigned int max_steps = std::numeric_limits<unsigned int>::max(),
                    const std::string &desc      = "",
                    const std::function<std::string(unsigned int)> &extra_fn = nullptr) {
-        // Validate inputs
-        if (!f)
-            throw std::invalid_argument("ProgressBar::for_while requires a valid callable");
-        if (max_steps == 0)
-            return;
-
-        // Reset timing history
-        recent_steps.clear();
-        last_time       = std::chrono::steady_clock::now();
-        last_step_index = 0;
-
-        // Initial print (before starting) (0% or just before start)
-        do_print(0,
-                 desc.empty() ? "" : desc,
-                 /*end_line=*/false);
-
-        // Main loop up to max_steps
-        for (unsigned int step = 1; step <= max_steps; ++step) {
-            // Run user function; it returns true to continue, false to stop
-            const bool cont = f(step);
-
-            // Measure step duration and update smoothing window
-            const auto   now = std::chrono::steady_clock::now();
-            const double step_seconds =
-                    std::chrono::duration_cast<std::chrono::duration<double>>(now - last_time)
-                            .count();
-            // Only record positive durations
-            if (step_seconds > 0.0) {
-                // Update recent steps window
-                recent_steps.push_back(step_seconds);
-                // Maintain window size
-                if (recent_steps.size() > smoothing)
-                    recent_steps.pop_front();
-            }
-            // Update last time/index
-            last_time       = now;
-            last_step_index = step;
-
-            // Build extra string from desc + extra_fn
-            std::string extra;
-            // If desc is provided, add it first
-            if (!desc.empty())
-                extra = desc;
-            // If extra_fn is provided, call it and append its result
-            if (extra_fn) {
-                if (const std::string s = extra_fn(step); !s.empty()) {
-                    if (!extra.empty())
-                        extra += "  ";
-                    extra += s;
-                }
-            }
-
-            // Print status line
-            do_print(step, extra, /*end_line=*/(!cont || step >= max_steps));
-
-            // Stop if user function returned false
-            if (!cont)
-                break;
-        }
+        (this->*for_while_dispatch)(f, max_steps, desc, extra_fn);
     }
 
     /**
@@ -298,63 +261,7 @@ public:
                   const std::function<void(unsigned int)>        &f,
                   const std::string                              &desc     = "",
                   const std::function<std::string(unsigned int)> &extra_fn = nullptr) {
-        // Validate inputs
-        if (!f)
-            throw std::invalid_argument("ProgressBar::for_each requires a valid callable");
-        if (end_index < start_index)
-            return;
-
-        // Determine current step for initial print
-        const unsigned int current_step = std::max(start_index, 1u) - 1u;
-
-        // Reset timing history for a fresh run
-        recent_steps.clear();
-        last_time       = std::chrono::steady_clock::now();
-        last_step_index = current_step;
-
-        // Initial print (0% or before starting)
-        do_print(current_step, !desc.empty() ? desc : "", /*end_line=*/false);
-
-        // Main loop over the specified range
-        for (unsigned int step = start_index; step <= end_index; ++step) {
-            // Run user function
-            f(step);
-
-            // Measure step duration and update smoothing window
-            const auto   now = std::chrono::steady_clock::now();
-            const double step_seconds =
-                    std::chrono::duration_cast<std::chrono::duration<double>>(now - last_time)
-                            .count();
-            // Only record positive durations
-            if (step_seconds > 0.0) {
-                // Update recent steps window
-                recent_steps.push_back(step_seconds);
-                // Maintain window size
-                if (recent_steps.size() > smoothing)
-                    recent_steps.pop_front();
-            }
-            // Update last time/index
-            last_time       = now;
-            last_step_index = step;
-
-            // Build extra string from desc + extra_fn
-            std::string extra;
-            // If desc is provided, add it first
-            if (!desc.empty())
-                extra = desc;
-            // If extra_fn is provided, call it and append its result
-            if (extra_fn) {
-                // Call extra_fn and append its result
-                if (const std::string s = extra_fn(step); !s.empty()) {
-                    if (!extra.empty())
-                        extra += "  ";
-                    extra += s;
-                }
-            }
-
-            // Print status line
-            do_print(step, extra, /*end_line=*/step >= end_index);
-        }
+        (this->*for_each_dispatch)(start_index, end_index, f, desc, extra_fn);
     }
 
     /**
@@ -416,9 +323,9 @@ public:
         Range(ProgressBar                             *b,
               const unsigned int                       s,
               const unsigned int                       e,
-              const std::string                       &d  = "",
+              std::string                              d  = "",
               std::function<std::string(unsigned int)> ef = nullptr)
-            : bar(b), start(s), end_idx(e), desc(d), extra_fn(std::move(ef)) {}
+            : bar(b), start(s), end_idx(e), desc(std::move(d)), extra_fn(std::move(ef)) {}
 
         /**
          * @brief Proxy object representing a single step in the iteration.
@@ -578,10 +485,43 @@ public:
                 const unsigned int                       e,
                 const std::string                       &desc     = "",
                 std::function<std::string(unsigned int)> extra_fn = nullptr) {
-        return Range(this, s, e, desc, std::move(extra_fn));
+        return (this->*range_dispatch)(s, e, desc, std::move(extra_fn));
     }
 
+    /**
+     * @brief Enable/disable the progress bar at runtime.
+     * @details
+     * When disabled, the public loop helpers (`for_each`, `for_while`, `range`) become no-ops
+     * with respect to timing/printing: they still execute the user-provided loop body, but
+     * they do not update or print the progress bar.
+     */
+    void set_enabled(const bool on) {
+        enabled = on;
+        update_dispatch();
+    }
+
+    /**
+     * @brief Return whether the progress bar is enabled at runtime.
+     */
+    [[nodiscard]] bool is_enabled() const { return enabled; }
+
 private:
+    /**
+     * @brief Whether the output is interactive (i.e., a TTY). Automatically detected.
+     * @details
+     * If the output is not a TTY (e.g., redirected to a file), the progress bar
+     * uses coarser updates to avoid cluttering the output with carriage returns.
+     */
+    bool interactive_output = true;
+    /**
+     * @brief Whether the progress bar is enabled at runtime.
+     * @details
+     * When disabled, the public loop helpers (`for_each`, `for_while`, `range`) become no-ops
+     * with respect to timing/printing: they still execute the user-provided loop body, but
+     * they do not update or print the progress bar.
+     */
+    bool enabled = true;
+
     /**
      * @brief Total number of steps in the loop (0 for unknown total).
      */
@@ -598,6 +538,34 @@ private:
      * @brief Whether to use smooth Unicode characters for the progress bar.
      */
     bool smooth_unicode = true;
+
+    /**
+     * @brief Last printed percentage for coarse logging in non-TTY output.
+     * @details
+     * In non-interactive output (non-TTY), the progress bar uses coarser updates
+     * to avoid cluttering the output with carriage returns. This variable tracks
+     * the last printed percentage to determine when to print the next update.
+     * Initially set to -1 to ensure the first update is printed; then updated in
+     * increments of coarse_percent_step.
+     */
+    int last_percent_print = -1; // for coarse logs
+    /**
+     * @brief Coarse percentage step for printing in non-TTY output.
+     * @details
+     * In non-interactive output (non-TTY), the progress bar prints updates
+     * every coarse_percent_step percentage points to avoid cluttering the output.
+     * For example, with a value of 5, the progress bar prints updates at 0%, 5%, 10%, etc.
+     */
+    unsigned int coarse_percent_step = 5;
+    /**
+     * @brief Coarse step interval for printing in unknown total mode.
+     * @details
+     * In unknown total mode, the progress bar prints updates every
+     * coarse_unknown_every step to avoid cluttering the output.
+     * For example, with a value of 25, the progress bar prints updates
+     * every 25 steps.
+     */
+    unsigned int coarse_unknown_every = 25;
 
     /**
      * @brief Start time point of the progress bar.
@@ -634,6 +602,276 @@ private:
     bool owns_out = false;
 
     /**
+     * @brief Type alias for member function pointer used in dispatching for for-loops.
+     * @details
+     * This alias defines the signature of the member function used for dispatching
+     * between enabled and disabled states of the progress bar for for-loops.
+     */
+    using ForEachMemFn = void (ProgressBar::*)(unsigned int,
+                                               unsigned int,
+                                               const std::function<void(unsigned int)> &,
+                                               const std::string &,
+                                               const std::function<std::string(unsigned int)> &);
+    /**
+     * @brief Type alias for member function pointer used in dispatching for while-loops.
+     * @details
+     * This alias defines the signature of the member function used for dispatching
+     * between enabled and disabled states of the progress bar for while-loops.
+     */
+    using ForWhileMemFn = void (ProgressBar::*)(const std::function<bool(unsigned int)> &,
+                                                unsigned int,
+                                                const std::string &,
+                                                const std::function<std::string(unsigned int)> &);
+    /**
+     * @brief Type alias for member function pointer used in dispatching for range-based loops.
+     * @details
+     * This alias defines the signature of the member function used for dispatching
+     * between enabled and disabled states of the progress bar for range-based loops.
+     */
+    using RangeMemFn = Range (ProgressBar::*)(unsigned int,
+                                              unsigned int,
+                                              const std::string &,
+                                              std::function<std::string(unsigned int)>);
+
+    /**
+     * @brief Member function pointer for dispatching for-loops based on enabled state.
+     * @details
+     * This member function pointer is set to point to either the enabled or disabled
+     * implementation of the for-loop helper based on the current enabled state of the
+     * progress bar.
+     */
+    ForEachMemFn for_each_dispatch = &ProgressBar::for_each_enabled;
+    /**
+     * @brief Member function pointer for dispatching while-loops based on enabled state.
+     * @details
+     * This member function pointer is set to point to either the enabled or disabled
+     * implementation of the while-loop helper based on the current enabled state of the
+     * progress bar.
+     */
+    ForWhileMemFn for_while_dispatch = &ProgressBar::for_while_enabled;
+    /**
+     * @brief Member function pointer for dispatching range-based loops based on enabled state.
+     * @details
+     * This member function pointer is set to point to either the enabled or disabled
+     * implementation of the range-based loop helper based on the current enabled state of the
+     * progress bar.
+     */
+    RangeMemFn range_dispatch = &ProgressBar::range_enabled;
+
+    /**
+     * @brief Update the dispatch function pointers based on the enabled state.
+     * @details
+     * This method sets the member function pointers for dispatching between
+     * enabled and disabled implementations of the loop helpers based on the
+     * current enabled state of the progress bar.
+     */
+    void update_dispatch() {
+        if (enabled) {
+            for_each_dispatch  = &ProgressBar::for_each_enabled;
+            for_while_dispatch = &ProgressBar::for_while_enabled;
+            range_dispatch     = &ProgressBar::range_enabled;
+        } else {
+            for_each_dispatch  = &ProgressBar::for_each_disabled;
+            for_while_dispatch = &ProgressBar::for_while_disabled;
+            range_dispatch     = &ProgressBar::range_disabled;
+        }
+    }
+
+    /**
+     * @brief Enabled implementation of for_while loop helper.
+     * @details
+     * This method implements the for_while loop helper when the progress bar
+     * is enabled. It tracks progress, updates timing, and prints the progress bar
+     * after each step. See `ProgressBar::for_while` for full documentation.
+     */
+    void for_while_enabled(const std::function<bool(unsigned int)>        &f,
+                           const unsigned int                              max_steps,
+                           const std::string                              &desc,
+                           const std::function<std::string(unsigned int)> &extra_fn) {
+        // Validate inputs
+        if (!f)
+            throw std::invalid_argument("ProgressBar::for_while requires a valid callable");
+        if (max_steps == 0)
+            return;
+
+        // Reset timing history
+        recent_steps.clear();
+        last_time       = std::chrono::steady_clock::now();
+        last_step_index = 0;
+
+        // Initial print (before starting) (0% or just before start)
+        do_print(0, desc.empty() ? "" : desc, /*end_line=*/false);
+
+        // Main loop up to max_steps
+        for (unsigned int step = 1; step <= max_steps; ++step) {
+            // Run user function; it returns true to continue, false to stop
+            const bool cont = f(step);
+
+            // Measure step duration and update smoothing window
+            const auto   now = std::chrono::steady_clock::now();
+            const double step_seconds =
+                    std::chrono::duration_cast<std::chrono::duration<double>>(now - last_time)
+                            .count();
+            // Only record positive durations
+            if (step_seconds > 0.0) {
+                // Update recent steps window
+                recent_steps.push_back(step_seconds);
+                // Maintain window size
+                if (recent_steps.size() > smoothing)
+                    recent_steps.pop_front();
+            }
+            // Update last time/index
+            last_time       = now;
+            last_step_index = step;
+
+            // Build extra string from desc + extra_fn
+            std::string extra;
+            if (!desc.empty())
+                extra = desc;
+            if (extra_fn) {
+                if (const std::string s = extra_fn(step); !s.empty()) {
+                    if (!extra.empty())
+                        extra += "  ";
+                    extra += s;
+                }
+            }
+
+            // Print status line
+            do_print(step, extra, /*end_line=*/(!cont || step >= max_steps));
+
+            // Stop if user function returned false
+            if (!cont)
+                break;
+        }
+    }
+
+    /**
+     * @brief Enabled implementation of for_each loop helper.
+     * @details
+     * This method implements the for_each loop helper when the progress bar
+     * is enabled. It tracks progress, updates timing, and prints the progress bar
+     * after each step. See `ProgressBar::for_each` for full documentation.
+     */
+    void for_each_enabled(const unsigned int                              start_index,
+                          const unsigned int                              end_index,
+                          const std::function<void(unsigned int)>        &f,
+                          const std::string                              &desc,
+                          const std::function<std::string(unsigned int)> &extra_fn) {
+        // Validate inputs
+        if (!f)
+            throw std::invalid_argument("ProgressBar::for_each requires a valid callable");
+        if (end_index < start_index)
+            return;
+
+        // Determine current step for initial print
+        const unsigned int current_step = std::max(start_index, 1u) - 1u;
+
+        // Reset timing history for a fresh run
+        recent_steps.clear();
+        last_time       = std::chrono::steady_clock::now();
+        last_step_index = current_step;
+
+        // Initial print (0% or before starting)
+        do_print(current_step, !desc.empty() ? desc : "", /*end_line=*/false);
+
+        // Main loop over the specified range
+        for (unsigned int step = start_index; step <= end_index; ++step) {
+            // Run user function
+            f(step);
+
+            // Measure step duration and update smoothing window
+            const auto   now = std::chrono::steady_clock::now();
+            const double step_seconds =
+                    std::chrono::duration_cast<std::chrono::duration<double>>(now - last_time)
+                            .count();
+            // Only record positive durations
+            if (step_seconds > 0.0) {
+                // Update recent steps window
+                recent_steps.push_back(step_seconds);
+                // Maintain window size
+                if (recent_steps.size() > smoothing)
+                    recent_steps.pop_front();
+            }
+            // Update last time/index
+            last_time       = now;
+            last_step_index = step;
+
+            // Build extra string from desc + extra_fn
+            std::string extra;
+            if (!desc.empty())
+                extra = desc;
+            if (extra_fn) {
+                if (const std::string s = extra_fn(step); !s.empty()) {
+                    if (!extra.empty())
+                        extra += "  ";
+                    extra += s;
+                }
+            }
+
+            // Print status line
+            do_print(step, extra, /*end_line=*/step >= end_index);
+        }
+    }
+
+    /**
+     * @brief Enabled implementation of range-based loop helper.
+     * @details
+     * This method implements the range-based loop helper when the progress bar
+     * is enabled. It returns a Range object that can be used in range-based for-loops.
+     * See `ProgressBar::range` for full documentation.
+     */
+    Range range_enabled(const unsigned int                       s,
+                        const unsigned int                       e,
+                        const std::string                       &desc,
+                        std::function<std::string(unsigned int)> extra_fn) {
+        return Range(this, s, e, desc, std::move(extra_fn));
+    }
+
+    /**
+     * @brief Disabled implementation of for_while loop helper.
+     * @details
+     * This method implements the for_while loop helper when the progress bar
+     * is disabled. It simply runs the user-provided callable without any
+     * timing or printing.
+     */
+    void for_while_disabled(const std::function<bool(unsigned int)> &f,
+                            const unsigned int                       max_steps,
+                            const std::string & /*desc*/,
+                            const std::function<std::string(unsigned int)> & /*extra_fn*/) {
+        if (!f)
+            throw std::invalid_argument("ProgressBar::for_while requires a valid callable");
+        if (max_steps == 0)
+            return;
+
+        for (unsigned int step = 1; step <= max_steps; ++step) {
+            if (!f(step))
+                break;
+        }
+    }
+
+    void for_each_disabled(const unsigned int                       start_index,
+                           const unsigned int                       end_index,
+                           const std::function<void(unsigned int)> &f,
+                           const std::string & /*desc*/,
+                           const std::function<std::string(unsigned int)> & /*extra_fn*/) {
+        if (!f)
+            throw std::invalid_argument("ProgressBar::for_each requires a valid callable");
+        if (end_index < start_index)
+            return;
+
+        for (unsigned int step = start_index; step <= end_index; ++step)
+            f(step);
+    }
+
+    Range range_disabled(const unsigned int s,
+                         const unsigned int e,
+                         const std::string & /*desc*/,
+                         std::function<std::string(unsigned int)> /*extra_fn*/) {
+        // Return a Range with a null bar: it will iterate but won't print/update.
+        return Range(nullptr, s, e, "", nullptr);
+    }
+
+    /**
      * @brief Do a print of the progress bar status line.
      * @param current_step Current step index (1-based).
      * @param extra Extra string to append to the status.
@@ -645,34 +883,54 @@ private:
      */
     void do_print(const unsigned int current_step, const std::string &extra, const bool end_line) {
         // If total_steps == 0 we are in "unknown total" mode
+        // If total_steps == 0 we are in "unknown total" mode
         if (total_steps == 0) {
-            // Simple spinner animation
+            // The spinner array cycles through these characters
             static constexpr char  spinner[]   = {'|', '/', '-', '\\'};
             constexpr unsigned int spinner_len = std::size(spinner);
-
-            // Use current_step to pick spinner frame so repeated runs are deterministic
+            // The frame is based on current_step modulo spinner length
             const char frame = spinner[current_step % spinner_len];
 
-            // Elapsed since start
             const long elapsed_local = std::chrono::duration_cast<std::chrono::seconds>(
                                                std::chrono::steady_clock::now() - start)
                                                .count();
 
+            // ----------------------------
+            // NON-INTERACTIVE (logs)
+            // ----------------------------
+            if (!interactive_output || !enabled) {
+                // print only every N steps, plus the final line
+                if (!end_line && (current_step % coarse_unknown_every != 0))
+                    return;
+
+                std::ostringstream ss;
+                ss << '[' << frame << "] "
+                   << "(step " << current_step << ")";
+                if (!extra.empty())
+                    ss << "  " << extra;
+                ss << "  elapsed=" << format_hms(elapsed_local) << '\n';
+
+                if (out_ptr)
+                    (void) (*out_ptr << ss.str() << std::flush);
+                return;
+            }
+
+            // ----------------------------
+            // INTERACTIVE (TTY)
+            // ----------------------------
             std::ostringstream ss;
             ss << '\r';
-            ss << '[' << frame << "] ";
-            ss << "(step " << current_step << ")";
+            ss << '[' << frame << "] "
+               << "(step " << current_step << ")";
             if (!extra.empty())
                 ss << "  " << extra;
             ss << "  elapsed=" << format_hms(elapsed_local);
-            // No ETA in unknown-total mode
+
             if (end_line)
                 ss << '\n';
 
-            // If out_ptr is valid, print to it
-            if (out_ptr) {
+            if (out_ptr)
                 (void) (*out_ptr << ss.str() << std::flush);
-            }
             return;
         }
 
@@ -697,8 +955,8 @@ private:
             // Compute fractional fill across bar_width characters
             const double frac =
                     (total_steps > 0) ? (percent / 100.0) * static_cast<double>(bar_width) : 0.0;
-            const unsigned int full_blocks = static_cast<unsigned int>(std::floor(frac));
-            const double       rem         = frac - static_cast<double>(full_blocks);
+            const auto   full_blocks = static_cast<unsigned int>(std::floor(frac));
+            const double rem         = frac - static_cast<double>(full_blocks);
 
             // Unicode partial blocks from smallest to largest (1/8 .. 7/8)
             static const std::vector<std::string> partial = {
@@ -741,6 +999,44 @@ private:
         const long elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                                      std::chrono::steady_clock::now() - start)
                                      .count();
+
+        // ----------------------------
+        // NON-INTERACTIVE (logs)
+        // ----------------------------
+        if (!interactive_output || !enabled) {
+            const int p = static_cast<int>(std::floor(percent));
+
+            const bool should_print =
+                    end_line || (p >= last_percent_print + static_cast<int>(coarse_percent_step)) ||
+                    (current_step == 1) || (current_step == total_steps);
+
+            if (!should_print)
+                return;
+
+            last_percent_print = p;
+
+            std::ostringstream ss;
+            ss << "[" << bar << "] ";
+            ss << std::fixed << std::setprecision(1) << std::setw(5) << percent << "% ";
+            ss << "(" << current_step << "/" << total_steps << ")";
+
+            if (!extra.empty())
+                ss << "  " << extra;
+
+            ss << "  elapsed=" << format_hms(elapsed);
+
+            if (eta_seconds >= 0.0)
+                ss << "  ETA=" << format_hms(std::llround(eta_seconds));
+            else
+                ss << "  ETA=--:--:--";
+
+            ss << '\n';
+
+            if (out_ptr)
+                (void) (*out_ptr << ss.str() << std::flush);
+
+            return;
+        }
 
         std::ostringstream ss;
         ss << '\r'; // carriage-return to overwrite the same line

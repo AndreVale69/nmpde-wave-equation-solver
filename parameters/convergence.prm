@@ -23,6 +23,7 @@ end
 
 subsection Output
   set every = 1
+  set enable_progress_bar = true
   set compute_error = false
   set convergence_study = true
   set convergence_type = Space

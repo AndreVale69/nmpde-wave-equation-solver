@@ -24,6 +24,7 @@ end
 
 subsection Output
   set every = 1
+  set enable_progress_bar = true
 end
 
 subsection Study

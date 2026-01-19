@@ -450,8 +450,24 @@ void Wave::do_solve() {
         pcout << "-----------------------------------------------" << std::endl;
     }
 
-
-    ProgressBar progress(static_cast<unsigned int>(std::ceil(T / deltat)), MPI_COMM_WORLD, &pcout);
+    pcout << "Starting time-stepping:" << std::endl;
+    pcout << "  Timestamp          = " << Utilities::System::get_date() << " "
+          << Utilities::System::get_time() << std::endl;
+    pcout << "  Final time T       = " << T << std::endl;
+    pcout << "  Time step deltat   = " << deltat << std::endl;
+    pcout << "  Number of steps    = " << static_cast<unsigned int>(std::ceil(T / deltat))
+          << std::endl;
+    pcout << "  Time scheme        = " << to_string(time_scheme) << std::endl;
+    pcout << "  Output every       = " << output_every << " steps" << std::endl;
+    pcout << "-----------------------------------------------" << std::endl;
+    ProgressBar progress(
+            /* total_steps=*/static_cast<unsigned int>(std::ceil(T / deltat)),
+            /* comm=*/MPI_COMM_WORLD,
+            /* external_out=*/&pcout,
+            /* bar_width=*/30,
+            /* smoothing=*/8,
+            /* smooth=*/true,
+            /* enabled=*/parameters->output.enable_progress_bar);
     progress.for_while(
             [&](const unsigned int step) -> bool {
                 // step is 1-based: t_n = (step-1)*deltat, t_np1 = step*deltat
@@ -555,6 +571,10 @@ void Wave::do_solve() {
                 oss << "t=" << std::fixed << std::setprecision(5) << t_show;
                 return oss.str();
             });
+    if (progress.is_enabled())
+        pcout << "-----------------------------------------------" << std::endl;
+    pcout << "Time-stepping complete at " << Utilities::System::get_date() << " "
+          << Utilities::System::get_time() << std::endl;
 
     // After time-stepping, print an extended error summary if using MMS (only on rank 0)
     if (parameters->problem.type == ProblemType::MMS && mpi_rank == 0) {
