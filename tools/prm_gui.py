@@ -44,6 +44,7 @@ DEFAULTS = {
     },
     "Output": {
         "every": "1",
+        "enable_progress_bar": True,
         "compute_error": False,
         "convergence_study": False,
         "convergence_type": "Time",
@@ -96,6 +97,7 @@ HELP = {
     ("Output", "convergence_csv"): "Optional path to a CSV file where the convergence table will be saved. Enabled only when convergence_study is true (and Problem.type is MMS). Leave empty to disable CSV output.",
     ("Output", "error_file"): "Path to the CSV file where the error history will be saved. Enabled only if compute_error is true.",
     ("Output", "vtk_directory"): "Directory where VTK (.vtu/.pvtu) output files will be written. Use the picker to choose an output folder.",
+    ("Output", "enable_progress_bar"): "Whether to enable the progress bar during time-stepping. It will be shown only on the master MPI process. Set to false to disable it. If the output is not a TTY (e.g., redirected to a file), the progress bar will be disabled automatically.",
 }
 
 PATH_FIELDS = {
