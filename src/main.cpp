@@ -3,12 +3,22 @@
 // Main function.
 int main(int argc, char *argv[]) {
     // read wave_prm from command line if provided
-    std::string wave_prm = "../../parameters/wave.prm";
-    const std::filesystem::path main_file_path = std::filesystem::canonical(argv[0]).parent_path();
-    wave_prm = (main_file_path / wave_prm).string();
+    std::string wave_prm;
+
     if (argc > 1) {
         wave_prm = argv[1];
     } else {
+        /**
+         * Project root directory.
+         * 1. Get canonical path of argv[0] (executable);
+         *    argv[0] is /.../root/build/nm4pde-lab/nm4pde
+         * 2. First parent: /.../root/build/nm4pde-lab
+         * 3. Second parent: /.../root/build
+         * 4. Third parent: /.../root
+         */
+        const std::filesystem::path root =
+                std::filesystem::canonical(argv[0]).parent_path().parent_path().parent_path();
+        wave_prm = (root / "parameters" / "wave.prm").string();
         std::cout << "No parameter file provided. Run with mpirun -np <nprocs> ./wave "
                      "<parameter_file>"
                   << std::endl;
