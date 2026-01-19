@@ -2,7 +2,7 @@
  * @file progress_bar.hpp
  * @brief A simple ASCII progress bar for long-running loops. Inspired by Python's tqdm.
  * @author Andrea Valentini
- * @date June 2024
+ * @date October 2025
  * @license MIT
  * @details
  * This class provides a simple ASCII progress bar for tracking the progress of
