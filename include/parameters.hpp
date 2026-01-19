@@ -127,6 +127,11 @@ struct Parameters {
         unsigned int output_every = 1;
 
         /**
+         * @brief Whether to enable the progress bar during time-stepping.
+         */
+        bool enable_progress_bar = true;
+
+        /**
          * @brief Whether to compute/save the error history.
          * Note: this is only meaningful for MMS problems; if set to true
          * for non-MMS problems it will be ignored (and a warning printed).
@@ -531,6 +536,15 @@ private:
         {
             prm.declare_entry(
                     "every", "1", Patterns::Integer(1), "Output frequency in time steps.");
+
+            prm.declare_entry("enable_progress_bar",
+                              "true",
+                              Patterns::Bool(),
+                              "Whether to enable the progress bar during time-stepping. It will be "
+                              "shown only on the master MPI process. Set to false to disable it. "
+                              "If the output is not a TTY (e.g., redirected to a file), the "
+                              "progress bar will be disabled automatically.");
+
             prm.declare_entry(
                     "compute_error",
                     "false",
@@ -645,6 +659,7 @@ private:
         prm.enter_subsection("Output");
         {
             output.output_every         = prm.get_integer("every");
+            output.enable_progress_bar  = prm.get_bool("enable_progress_bar");
             output.compute_error        = prm.get_bool("compute_error");
             output.convergence_study    = prm.get_bool("convergence_study");
             output.convergence_type     = convergence_type_from_string(prm.get("convergence_type"));
