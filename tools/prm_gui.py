@@ -16,6 +16,35 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, filedialog, messagebox
 
+APP_TITLE = "PRM Editor"
+
+THEMES = {
+    "light": {
+        "bg": "#f6f7fb",
+        "panel": "#ffffff",
+        "text": "#1f2430",
+        "muted": "#5f6b7a",
+        "accent": "#3b82f6",
+        "accent_dark": "#2563eb",
+        "border": "#d7dbe6",
+        "entry": "#ffffff",
+        "preview_bg": "#0f172a",
+        "preview_fg": "#e2e8f0",
+    },
+    "dark": {
+        "bg": "#0f172a",
+        "panel": "#111827",
+        "text": "#e5e7eb",
+        "muted": "#9ca3af",
+        "accent": "#60a5fa",
+        "accent_dark": "#3b82f6",
+        "border": "#1f2937",
+        "entry": "#0b1220",
+        "preview_bg": "#0b1220",
+        "preview_fg": "#e5e7eb",
+    },
+}
+
 DEFAULTS = {
     "Problem": {
         "type": "Physical",
@@ -108,6 +137,46 @@ PATH_FIELDS = {
 }
 
 
+class ToolTip:
+    def __init__(self, widget, text, delay=500, wrap=380):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.wrap = wrap
+        self._after_id = None
+        self._tip = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._hide)
+        widget.bind("<ButtonPress>", self._hide)
+
+    def _schedule(self, _event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _cancel(self):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        if self._tip or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 16
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.overrideredirect(True)
+        self._tip.attributes("-topmost", True)
+        label = ttk.Label(self._tip, text=self.text, style="Tooltip.TLabel", wraplength=self.wrap, justify=tk.LEFT)
+        label.pack(ipadx=8, ipady=6)
+        self._tip.geometry(f"+{x}+{y}")
+
+    def _hide(self, _event=None):
+        self._cancel()
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+
+
 def parse_prm_file(path: Path):
     """Robust parser for simple 'subsection NAME' / 'set key = value' files.
 
@@ -164,41 +233,96 @@ def parse_prm_file(path: Path):
 class PrmGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PRM Editor")
-        self.geometry("900x600")
+        self.title(APP_TITLE)
+        self.geometry("980x640")
+        self.minsize(860, 560)
+        self.theme_name = "light"
+        self.style = ttk.Style(self)
         # store mapping: section -> key -> {var: tk.Variable, widget: widget}
         self.vars = {}
+        self._tooltip_instances = []
+
+        self.apply_theme(self.theme_name)
+        self._build_menu()
 
         self._build_ui()
         self.load_defaults()
 
+    def _build_menu(self):
+        menubar = tk.Menu(self)
+        view = tk.Menu(menubar, tearoff=0)
+        view.add_command(label="Light theme", command=lambda: self.apply_theme("light"))
+        view.add_command(label="Dark theme", command=lambda: self.apply_theme("dark"))
+        menubar.add_cascade(label="View", menu=view)
+        self.config(menu=menubar)
+
+    def apply_theme(self, name: str):
+        theme = THEMES.get(name, THEMES["light"])
+        self.theme_name = name
+        try:
+            self.style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        self.configure(bg=theme["bg"])
+        self.style.configure("App.TFrame", background=theme["bg"])
+        self.style.configure("Panel.TFrame", background=theme["panel"], borderwidth=1, relief="solid")
+        self.style.configure("Header.TLabel", background=theme["bg"], foreground=theme["text"], font=("Segoe UI", 12, "bold"))
+        self.style.configure("Muted.TLabel", background=theme["bg"], foreground=theme["muted"], font=("Segoe UI", 9))
+        self.style.configure("Field.TLabel", background=theme["panel"], foreground=theme["text"], font=("Segoe UI", 10))
+        self.style.configure("TLabel", background=theme["panel"], foreground=theme["text"], font=("Segoe UI", 10))
+        self.style.configure("TFrame", background=theme["panel"])
+        self.style.configure("TNotebook", background=theme["bg"], borderwidth=0)
+        self.style.configure("TNotebook.Tab", padding=(16, 6), font=("Segoe UI", 10))
+        self.style.map("TNotebook.Tab", background=[("selected", theme["panel"]), ("!selected", theme["bg"])],
+                       foreground=[("selected", theme["text"]), ("!selected", theme["muted"])])
+
+        self.style.configure("TEntry", fieldbackground=theme["entry"], foreground=theme["text"], bordercolor=theme["border"], lightcolor=theme["border"], darkcolor=theme["border"])
+        self.style.configure("TCombobox", fieldbackground=theme["entry"], foreground=theme["text"], arrowcolor=theme["text"], bordercolor=theme["border"], lightcolor=theme["border"], darkcolor=theme["border"])
+        self.style.configure("TCheckbutton", background=theme["panel"], foreground=theme["text"])
+        self.style.configure("TButton", padding=(10, 6))
+        self.style.configure("Primary.TButton", background=theme["accent"], foreground="white", bordercolor=theme["accent_dark"], focusthickness=0)
+        self.style.map("Primary.TButton", background=[("active", theme["accent_dark"])])
+        self.style.configure("Secondary.TButton", background=theme["panel"], foreground=theme["text"], bordercolor=theme["border"])
+        self.style.configure("Tooltip.TLabel", background=theme["panel"], foreground=theme["text"], relief="solid", borderwidth=1)
+
+        self.option_add("*Font", ("Segoe UI", 10))
+        self.option_add("*Background", theme["bg"])
+        self.option_add("*Foreground", theme["text"])
+
     def _build_ui(self):
-        frm = ttk.Frame(self)
-        frm.pack(fill=tk.BOTH, expand=True)
+        outer = ttk.Frame(self, style="App.TFrame")
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        header = ttk.Frame(outer, style="App.TFrame")
+        header.pack(fill=tk.X, padx=14, pady=(12, 6))
+        ttk.Label(header, text=APP_TITLE, style="Header.TLabel").pack(side=tk.LEFT)
+        ttk.Label(header, text="Create and edit deal.II .prm files", style="Muted.TLabel").pack(side=tk.LEFT, padx=12)
 
         # left: notebook with sections
-        self.notebook = ttk.Notebook(frm)
-        self.notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        self.notebook = ttk.Notebook(outer)
+        self.notebook.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=12, pady=8)
 
         for section, entries in DEFAULTS.items():
-            f = ttk.Frame(self.notebook)
+            f = ttk.Frame(self.notebook, style="Panel.TFrame", padding=(10, 8))
             self.notebook.add(f, text=section)
             self.vars[section] = {}
+            f.columnconfigure(1, weight=1)
             row = 0
             for key, default in entries.items():
-                ttk.Label(f, text=key).grid(row=row, column=0, sticky=tk.W, padx=6, pady=4)
+                ttk.Label(f, text=key, style="Field.TLabel").grid(row=row, column=0, sticky=tk.W, padx=(6, 8), pady=6)
                 info_btn = None
                 # Provide a combobox for known enumerations
                 if (section, key) in CHOICES:
                     values = CHOICES[(section, key)]
                     var = tk.StringVar(value=str(default))
                     widget = ttk.Combobox(f, textvariable=var, values=values, state="readonly")
-                    widget.grid(row=row, column=1, sticky=tk.W, padx=6)
+                    widget.grid(row=row, column=1, sticky=tk.EW, padx=(0, 6))
                 # Provide path picker for path-like fields
                 elif (section, key) in PATH_FIELDS:
                     var = tk.StringVar(value=str(default))
-                    widget = ttk.Entry(f, textvariable=var, width=68)
-                    widget.grid(row=row, column=1, sticky=tk.W, padx=(6, 0))
+                    widget = ttk.Entry(f, textvariable=var)
+                    widget.grid(row=row, column=1, sticky=tk.EW, padx=(0, 6))
                     def make_picker(s=section, k=key, v=var):
                         def _pick():
                             if (s, k) == ("Mesh", "mesh_file"):
@@ -218,19 +342,19 @@ class PrmGUI(tk.Tk):
                                 if p:
                                     v.set(p)
                         return _pick
-                    pick_btn = ttk.Button(f, text="...", width=3, command=make_picker())
-                    pick_btn.grid(row=row, column=2, sticky=tk.W, padx=4)
+                    pick_btn = ttk.Button(f, text="Browse", style="Secondary.TButton", command=make_picker())
+                    pick_btn.grid(row=row, column=2, sticky=tk.W, padx=(0, 6))
                     info_btn = None
                 else:
                     # boolean -> checkbox, else entry
                     if isinstance(default, bool):
                         var = tk.BooleanVar(value=default)
                         widget = ttk.Checkbutton(f, variable=var)
-                        widget.grid(row=row, column=1, sticky=tk.W, padx=6)
+                        widget.grid(row=row, column=1, sticky=tk.W, padx=(0, 6))
                     else:
                         var = tk.StringVar(value=str(default))
-                        widget = ttk.Entry(f, textvariable=var, width=80)
-                        widget.grid(row=row, column=1, sticky=tk.W, padx=6)
+                        widget = ttk.Entry(f, textvariable=var)
+                        widget.grid(row=row, column=1, sticky=tk.EW, padx=(0, 6))
 
                 # store both var and widget for dynamic enabling/disabling
                 self.vars[section][key] = {"var": var, "widget": widget}
@@ -249,19 +373,20 @@ class PrmGUI(tk.Tk):
                 if (section, key) in HELP:
                     def make_info(text=HELP[(section, key)]):
                         return lambda: messagebox.showinfo("Help", text)
-                    ib = ttk.Button(f, text="i", width=2, command=make_info())
-                    ib.grid(row=row, column=3, sticky=tk.W, padx=4)
+                    ib = ttk.Button(f, text="?", style="Secondary.TButton", command=make_info())
+                    ib.grid(row=row, column=3, sticky=tk.W, padx=(0, 6))
+                    self._tooltip_instances.append(ToolTip(widget, HELP[(section, key)]))
 
                 row += 1
 
         # bottom controls
-        ctrl = ttk.Frame(self)
-        ctrl.pack(fill=tk.X, padx=8, pady=8)
+        ctrl = ttk.Frame(outer, style="App.TFrame")
+        ctrl.pack(fill=tk.X, padx=12, pady=(4, 12))
 
-        ttk.Button(ctrl, text="Load .prm", command=self.load_prm).pack(side=tk.LEFT, padx=4)
-        ttk.Button(ctrl, text="Load defaults", command=self.load_defaults).pack(side=tk.LEFT, padx=4)
-        ttk.Button(ctrl, text="Preview", command=self.preview).pack(side=tk.LEFT, padx=4)
-        ttk.Button(ctrl, text="Save .prm", command=self.save_prm).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(ctrl, text="Load .prm", style="Secondary.TButton", command=self.load_prm).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(ctrl, text="Load defaults", style="Secondary.TButton", command=self.load_defaults).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(ctrl, text="Preview", style="Secondary.TButton", command=self.preview).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(ctrl, text="Save .prm", style="Primary.TButton", command=self.save_prm).pack(side=tk.RIGHT)
 
     def load_defaults(self):
         for s, entries in DEFAULTS.items():
@@ -335,10 +460,28 @@ class PrmGUI(tk.Tk):
         txt = self.format_prm(params)
         preview = tk.Toplevel(self)
         preview.title("Preview .prm")
-        t = tk.Text(preview, wrap=tk.NONE)
+        preview.geometry("820x520")
+        preview.configure(bg=THEMES[self.theme_name]["preview_bg"])
+
+        frame = ttk.Frame(preview, style="Panel.TFrame")
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        text_bg = THEMES[self.theme_name]["preview_bg"]
+        text_fg = THEMES[self.theme_name]["preview_fg"]
+
+        t = tk.Text(frame, wrap=tk.NONE, bg=text_bg, fg=text_fg, insertbackground=text_fg,
+                    font=("Consolas", 10), relief=tk.FLAT)
         t.insert("1.0", txt)
         t.config(state=tk.DISABLED)
-        t.pack(fill=tk.BOTH, expand=True)
+        xscroll = ttk.Scrollbar(frame, orient=tk.HORIZONTAL, command=t.xview)
+        yscroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=t.yview)
+        t.configure(xscrollcommand=xscroll.set, yscrollcommand=yscroll.set)
+
+        t.grid(row=0, column=0, sticky=tk.NSEW)
+        yscroll.grid(row=0, column=1, sticky=tk.NS)
+        xscroll.grid(row=1, column=0, sticky=tk.EW)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
 
     def save_prm(self):
         p = filedialog.asksaveasfilename(
