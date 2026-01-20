@@ -35,20 +35,6 @@ private:
     const unsigned int k, l;
 };
 
-double Wave::compute_energy(const TrilinosWrappers::MPI::Vector &u_owned,
-                            const TrilinosWrappers::MPI::Vector &v_owned) const {
-    // tmp = M v
-    TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
-    mass_matrix.vmult(tmp, v_owned);
-    const double vMv = v_owned * tmp; // dot product
-
-    // tmp = K u
-    stiffness_matrix.vmult(tmp, u_owned);
-    const double uKu = u_owned * tmp;
-
-    return 0.5 * (vMv + uKu);
-}
-
 void Wave::setup() {
     pcout << "===============================================" << std::endl;
 
@@ -177,6 +163,30 @@ void Wave::solve() {
         return convergence();
     }
     do_solve();
+}
+
+double Wave::compute_energy(const TrilinosWrappers::MPI::Vector &u_owned,
+                            const TrilinosWrappers::MPI::Vector &v_owned) const {
+    // tmp = M v
+    TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
+    mass_matrix.vmult(tmp, v_owned);
+    const double vMv = v_owned * tmp; // dot product
+
+    // tmp = K u
+    stiffness_matrix.vmult(tmp, u_owned);
+    const double uKu = u_owned * tmp;
+
+    return 0.5 * (vMv + uKu);
+}
+
+std::map<types::global_dof_index, double> Wave::build_zero_dirichlet_map() const {
+    std::map<types::global_dof_index, double> bv;
+    Functions::ZeroFunction<dim>              zero;
+
+    for (const auto id: boundary_ids)
+        VectorTools::interpolate_boundary_values(dof_handler, id, zero, bv);
+
+    return bv;
 }
 
 void Wave::assemble_matrices() {
@@ -319,6 +329,7 @@ void Wave::output(const unsigned int &time_step) const {
 
     data_out.write_vtu_with_pvtu_record(vtk_dir, "output", time_step, MPI_COMM_WORLD, 3);
 }
+
 
 void Wave::do_solve() {
     assemble_matrices();
@@ -581,7 +592,6 @@ void Wave::do_solve() {
         print_error_summary();
     }
 }
-
 
 void Wave::convergence() {
     using dealii::ConvergenceTable;
@@ -1345,14 +1355,4 @@ void Wave::process_mesh_input() {
         AssertThrow(false,
                     ExcMessage(std::string("Exception while processing mesh input: ") + e.what()));
     }
-}
-
-std::map<types::global_dof_index, double> Wave::build_zero_dirichlet_map() const {
-    std::map<types::global_dof_index, double> bv;
-    Functions::ZeroFunction<dim>              zero;
-
-    for (const auto id: boundary_ids)
-        VectorTools::interpolate_boundary_values(dof_handler, id, zero, bv);
-
-    return bv;
 }
