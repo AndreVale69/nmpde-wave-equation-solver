@@ -139,7 +139,7 @@ void Wave::setup() {
     switch (time_scheme) {
         case TimeScheme::Theta:
             pcout << "Initializing the Theta time integrator" << std::endl;
-            time_integrator = std::make_unique<ThetaIntegrator>(theta);
+            time_integrator = std::make_unique<ThetaIntegrator>(parameters->time.theta);
             break;
 
         case TimeScheme::CentralDifference:
@@ -594,7 +594,7 @@ void Wave::do_solve() {
     }
 }
 
-void Wave::convergence() {
+void Wave::convergence() const {
     using dealii::ConvergenceTable;
 
     AssertThrow(parameters->problem.type == ProblemType::MMS,

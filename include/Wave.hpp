@@ -64,7 +64,6 @@ public:
         , r(parameters->mesh.degree)
         , output_every(parameters->output.output_every)
         , deltat(parameters->time.dt)
-        , theta(parameters->time.theta)
         , time_scheme(parameters->time.scheme)
         , mesh(MPI_COMM_WORLD) {
         // If the user provided a .geo file, try to generate a .msh mesh file
@@ -83,7 +82,6 @@ public:
         , r(this->parameters->mesh.degree)
         , output_every(this->parameters->output.output_every)
         , deltat(this->parameters->time.dt)
-        , theta(this->parameters->time.theta)
         , time_scheme(this->parameters->time.scheme)
         , mesh(MPI_COMM_WORLD) {
         AssertThrow(this->parameters, ExcMessage("Wave: parameters pointer is null"));
@@ -129,7 +127,7 @@ protected:
     void do_solve();
 
     // Convergence studies.
-    void convergence();
+    void convergence() const;
 
     // Error statistics structure.
     struct ErrorStatistics {
@@ -273,9 +271,6 @@ protected:
 
     // Time step.
     const double deltat;
-
-    // Theta parameter of the theta method.
-    const double theta;
 
     // Time integration scheme.
     const TimeScheme time_scheme;
