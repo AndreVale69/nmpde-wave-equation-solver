@@ -30,18 +30,40 @@ THEMES = {
         "entry": "#ffffff",
         "preview_bg": "#0f172a",
         "preview_fg": "#e2e8f0",
+        "select_bg": "#dbeafe",
+        "select_fg": "#0f172a",
+        "listbox_bg": "#ffffff",
+        "listbox_fg": "#1f2430",
+        "listbox_select_bg": "#bfdbfe",
+        "listbox_select_fg": "#0f172a",
+        "disabled_entry": "#eef0f5",
+        "focus_border": "#9aa3b2",
+        "enabled_border": "#9aa3b2",
+        "disabled_border": "#d7dbe6",
     },
     "dark": {
-        "bg": "#0f172a",
-        "panel": "#111827",
-        "text": "#e5e7eb",
-        "muted": "#9ca3af",
-        "accent": "#60a5fa",
+        "bg": "#0b1220",
+        "panel": "#0f172a",
+        "text": "#e2e8f0",
+        "muted": "#94a3b8",
+        "accent": "#5b9dff",
         "accent_dark": "#3b82f6",
-        "border": "#1f2937",
-        "entry": "#0b1220",
+        "border": "#1e293b",
+        "entry": "#0f172a",
         "preview_bg": "#0b1220",
-        "preview_fg": "#e5e7eb",
+        "preview_fg": "#e2e8f0",
+        "select_bg": "#334155",
+        "select_fg": "#e2e8f0",
+        "listbox_bg": "#0f172a",
+        "listbox_fg": "#e2e8f0",
+        "listbox_select_bg": "#334155",
+        "listbox_select_fg": "#e2e8f0",
+        "hover_bg": "#1f2a44",
+        "hover_fg": "#e2e8f0",
+        "disabled_entry": "#111827",
+        "focus_border": "#7c8799",
+        "enabled_border": "#7c8799",
+        "disabled_border": "#1e293b",
     },
 }
 
@@ -255,6 +277,8 @@ class PrmGUI(tk.Tk):
         view.add_command(label="Dark theme", command=lambda: self.apply_theme("dark"))
         menubar.add_cascade(label="View", menu=view)
         self.config(menu=menubar)
+        self._menubar = menubar
+        self._view_menu = view
 
     def apply_theme(self, name: str):
         theme = THEMES.get(name, THEMES["light"])
@@ -269,7 +293,9 @@ class PrmGUI(tk.Tk):
         self.style.configure("Panel.TFrame", background=theme["panel"], borderwidth=1, relief="solid")
         self.style.configure("Header.TLabel", background=theme["bg"], foreground=theme["text"], font=("Segoe UI", 12, "bold"))
         self.style.configure("Muted.TLabel", background=theme["bg"], foreground=theme["muted"], font=("Segoe UI", 9))
+        self.style.configure("FieldReason.TLabel", background=theme["panel"], foreground=theme["text"], font=("Segoe UI", 9, "italic"))
         self.style.configure("Field.TLabel", background=theme["panel"], foreground=theme["text"], font=("Segoe UI", 10))
+        self.style.configure("FieldDisabled.TLabel", background=theme["panel"], foreground=theme["muted"], font=("Segoe UI", 10))
         self.style.configure("TLabel", background=theme["panel"], foreground=theme["text"], font=("Segoe UI", 10))
         self.style.configure("TFrame", background=theme["panel"])
         self.style.configure("TNotebook", background=theme["bg"], borderwidth=0)
@@ -277,18 +303,109 @@ class PrmGUI(tk.Tk):
         self.style.map("TNotebook.Tab", background=[("selected", theme["panel"]), ("!selected", theme["bg"])],
                        foreground=[("selected", theme["text"]), ("!selected", theme["muted"])])
 
-        self.style.configure("TEntry", fieldbackground=theme["entry"], foreground=theme["text"], bordercolor=theme["border"], lightcolor=theme["border"], darkcolor=theme["border"])
-        self.style.configure("TCombobox", fieldbackground=theme["entry"], foreground=theme["text"], arrowcolor=theme["text"], bordercolor=theme["border"], lightcolor=theme["border"], darkcolor=theme["border"])
-        self.style.configure("TCheckbutton", background=theme["panel"], foreground=theme["text"])
+        self.style.configure(
+            "TEntry",
+            fieldbackground=theme["entry"],
+            foreground=theme["text"],
+            bordercolor=theme["border"],
+            lightcolor=theme["border"],
+            darkcolor=theme["border"],
+            borderwidth=1,
+            selectbackground=theme["select_bg"],
+            selectforeground=theme["select_fg"],
+        )
+        self.style.map(
+            "TEntry",
+            fieldbackground=[("disabled", theme["disabled_entry"])],
+            foreground=[("disabled", theme["muted"])],
+            bordercolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+            lightcolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+            darkcolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+        )
+        self.style.configure(
+            "TCombobox",
+            fieldbackground=theme["entry"],
+            foreground=theme["text"],
+            arrowcolor=theme["text"],
+            bordercolor=theme["border"],
+            lightcolor=theme["border"],
+            darkcolor=theme["border"],
+            borderwidth=1,
+            selectbackground=theme["select_bg"],
+            selectforeground=theme["select_fg"],
+        )
+        self.style.configure(
+            "TCheckbutton",
+            background=theme["panel"],
+            foreground=theme["text"],
+            indicatorbackground=theme["entry"],
+            indicatorforeground=theme["text"],
+        )
+        self.style.configure("Inline.TCheckbutton", padding=(6, 4))
+        self.style.map(
+            "TCheckbutton",
+            background=[("active", theme.get("hover_bg", theme["panel"]))],
+            foreground=[("active", theme.get("hover_fg", theme["text"]))],
+        )
         self.style.configure("TButton", padding=(10, 6))
+        self.style.map(
+            "TButton",
+            background=[("active", theme.get("hover_bg", theme["panel"]))],
+            foreground=[("active", theme.get("hover_fg", theme["text"]))],
+        )
         self.style.configure("Primary.TButton", background=theme["accent"], foreground="white", bordercolor=theme["accent_dark"], focusthickness=0)
-        self.style.map("Primary.TButton", background=[("active", theme["accent_dark"])])
-        self.style.configure("Secondary.TButton", background=theme["panel"], foreground=theme["text"], bordercolor=theme["border"])
+        self.style.map(
+            "Primary.TButton",
+            background=[("active", theme["accent_dark"]), ("disabled", theme["border"])],
+            foreground=[("disabled", theme["muted"])],
+        )
+        self.style.configure("Secondary.TButton", background=theme["panel"], foreground=theme["text"], bordercolor=theme["border"], focusthickness=0)
+        self.style.map(
+            "Secondary.TButton",
+            background=[("active", theme.get("hover_bg", theme["panel"])), ("disabled", theme["panel"])],
+            foreground=[("active", theme.get("hover_fg", theme["text"])), ("disabled", theme["muted"])],
+        )
+        self.style.configure("Inline.TButton", padding=(6, 4), font=("Segoe UI", 9), background=theme["panel"], foreground=theme["text"], bordercolor=theme["border"], focusthickness=0)
+        self.style.map(
+            "Inline.TButton",
+            background=[("active", theme.get("hover_bg", theme["panel"])), ("disabled", theme["panel"])],
+            foreground=[("active", theme.get("hover_fg", theme["text"])), ("disabled", theme["muted"])],
+        )
+        self.style.configure("Help.TButton", padding=(4, 2), font=("Segoe UI", 8), background=theme["panel"], foreground=theme["text"], bordercolor=theme["border"], focusthickness=0)
+        self.style.map(
+            "Help.TButton",
+            background=[("active", theme.get("hover_bg", theme["panel"])), ("disabled", theme["panel"])],
+            foreground=[("active", theme.get("hover_fg", theme["text"])), ("disabled", theme["muted"])],
+            bordercolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+            lightcolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+            darkcolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+        )
         self.style.configure("Tooltip.TLabel", background=theme["panel"], foreground=theme["text"], relief="solid", borderwidth=1)
 
         self.option_add("*Font", ("Segoe UI", 10))
         self.option_add("*Background", theme["bg"])
         self.option_add("*Foreground", theme["text"])
+        self.option_add("*TCombobox*Listbox*background", theme["listbox_bg"])
+        self.option_add("*TCombobox*Listbox*foreground", theme["listbox_fg"])
+        self.option_add("*TCombobox*Listbox*selectBackground", theme["listbox_select_bg"])
+        self.option_add("*TCombobox*Listbox*selectForeground", theme["listbox_select_fg"])
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", theme["entry"]), ("active", theme["entry"]), ("focus", theme["entry"]), ("disabled", theme["disabled_entry"])],
+            foreground=[("readonly", theme["text"]), ("active", theme["text"]), ("focus", theme["text"]), ("disabled", theme["muted"])],
+            background=[("readonly", theme["entry"]), ("active", theme["entry"]), ("focus", theme["entry"]), ("disabled", theme["disabled_entry"])],
+            arrowcolor=[("active", theme["text"]), ("focus", theme["text"]), ("disabled", theme["muted"]), ("!disabled", theme["text"])],
+            bordercolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+            lightcolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+            darkcolor=[("disabled", theme["disabled_border"]), ("!disabled", theme["enabled_border"])],
+        )
+
+        self._apply_boolean_theme()
+
+        if hasattr(self, "_menubar"):
+            self._menubar.configure(background=theme["bg"], foreground=theme["text"], activebackground=theme.get("hover_bg", theme["panel"]), activeforeground=theme["text"], borderwidth=0)
+        if hasattr(self, "_view_menu"):
+            self._view_menu.configure(background=theme["panel"], foreground=theme["text"], activebackground=theme.get("hover_bg", theme["panel"]), activeforeground=theme["text"], borderwidth=0)
 
     def _build_ui(self):
         outer = ttk.Frame(self, style="App.TFrame")
@@ -308,9 +425,13 @@ class PrmGUI(tk.Tk):
             self.notebook.add(f, text=section)
             self.vars[section] = {}
             f.columnconfigure(1, weight=1)
+            f.columnconfigure(4, weight=1)
             row = 0
             for key, default in entries.items():
-                ttk.Label(f, text=key, style="Field.TLabel").grid(row=row, column=0, sticky=tk.W, padx=(6, 8), pady=6)
+                pick_btn = None
+                pretty_key = key.replace("_", " ").title()
+                lbl = ttk.Label(f, text=pretty_key, style="Field.TLabel")
+                lbl.grid(row=row, column=0, sticky=tk.W, padx=(6, 8), pady=6)
                 info_btn = None
                 # Provide a combobox for known enumerations
                 if (section, key) in CHOICES:
@@ -342,14 +463,14 @@ class PrmGUI(tk.Tk):
                                 if p:
                                     v.set(p)
                         return _pick
-                    pick_btn = ttk.Button(f, text="Browse", style="Secondary.TButton", command=make_picker())
+                    pick_btn = ttk.Button(f, text="Browse", style="Help.TButton", command=make_picker())
                     pick_btn.grid(row=row, column=2, sticky=tk.W, padx=(0, 6))
                     info_btn = None
                 else:
                     # boolean -> checkbox, else entry
                     if isinstance(default, bool):
                         var = tk.BooleanVar(value=default)
-                        widget = ttk.Checkbutton(f, variable=var)
+                        widget = tk.Checkbutton(f, variable=var, text="", takefocus=False, borderwidth=0, highlightthickness=0)
                         widget.grid(row=row, column=1, sticky=tk.W, padx=(0, 6))
                     else:
                         var = tk.StringVar(value=str(default))
@@ -357,7 +478,18 @@ class PrmGUI(tk.Tk):
                         widget.grid(row=row, column=1, sticky=tk.EW, padx=(0, 6))
 
                 # store both var and widget for dynamic enabling/disabling
-                self.vars[section][key] = {"var": var, "widget": widget}
+                reason_lbl = ttk.Label(f, text="", style="FieldReason.TLabel")
+                reason_lbl.grid(row=row, column=4, sticky=tk.W, padx=(0, 6))
+
+                self.vars[section][key] = {
+                    "var": var,
+                    "widget": widget,
+                    "reason_label": reason_lbl,
+                    "pick_btn": locals().get("pick_btn"),
+                    "label": lbl,
+                    "is_bool": isinstance(default, bool),
+                    "section": section,
+                }
 
                 # attach watchers for dependent fields
                 if section == "Problem" and key == "type":
@@ -373,7 +505,7 @@ class PrmGUI(tk.Tk):
                 if (section, key) in HELP:
                     def make_info(text=HELP[(section, key)]):
                         return lambda: messagebox.showinfo("Help", text)
-                    ib = ttk.Button(f, text="?", style="Secondary.TButton", command=make_info())
+                    ib = ttk.Button(f, text="?", style="Help.TButton", width=2, command=make_info())
                     ib.grid(row=row, column=3, sticky=tk.W, padx=(0, 6))
                     self._tooltip_instances.append(ToolTip(widget, HELP[(section, key)]))
 
@@ -383,10 +515,51 @@ class PrmGUI(tk.Tk):
         ctrl = ttk.Frame(outer, style="App.TFrame")
         ctrl.pack(fill=tk.X, padx=12, pady=(4, 12))
 
-        ttk.Button(ctrl, text="Load .prm", style="Secondary.TButton", command=self.load_prm).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(ctrl, text="Load defaults", style="Secondary.TButton", command=self.load_defaults).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(ctrl, text="Preview", style="Secondary.TButton", command=self.preview).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(ctrl, text="Save .prm", style="Primary.TButton", command=self.save_prm).pack(side=tk.RIGHT)
+        btn_load = ttk.Button(ctrl, text="Load .prm", style="Secondary.TButton", command=self.load_prm)
+        btn_load.pack(side=tk.LEFT, padx=(0, 6))
+        btn_defaults = ttk.Button(ctrl, text="Load defaults", style="Secondary.TButton", command=self.load_defaults)
+        btn_defaults.pack(side=tk.LEFT, padx=(0, 6))
+        btn_preview = ttk.Button(ctrl, text="Preview", style="Secondary.TButton", command=self.preview)
+        btn_preview.pack(side=tk.LEFT, padx=(0, 6))
+        btn_save = ttk.Button(ctrl, text="Save .prm", style="Primary.TButton", command=self.save_prm)
+        btn_save.pack(side=tk.RIGHT)
+
+        self._tooltip_instances.extend([
+            ToolTip(btn_load, "Open an existing .prm file and populate the fields."),
+            ToolTip(btn_defaults, "Restore the default parameters for all sections."),
+            ToolTip(btn_preview, "Preview the generated .prm file before saving."),
+            ToolTip(btn_save, "Validate and save the .prm file to disk."),
+        ])
+
+        self._apply_boolean_theme()
+
+    def _apply_boolean_theme(self):
+        if not hasattr(self, "vars"):
+            return
+        theme = THEMES.get(self.theme_name, THEMES["light"])
+        for sec, kv in self.vars.items():
+            for key, record in kv.items():
+                if not record.get("is_bool"):
+                    continue
+                widget = record.get("widget")
+                is_output = record.get("section") == "Output"
+                font_size = 14 if is_output else 12
+                pady = 4 if is_output else 2
+                padx = 8 if is_output else 6
+                try:
+                    widget.configure(
+                        bg=theme["panel"],
+                        activebackground=theme.get("hover_bg", theme["panel"]),
+                        fg=theme["text"],
+                        activeforeground=theme["text"],
+                        disabledforeground=theme["muted"],
+                        selectcolor=theme["entry"],
+                        font=("Segoe UI", font_size),
+                        padx=padx,
+                        pady=pady,
+                    )
+                except Exception:
+                    pass
 
     def load_defaults(self):
         for s, entries in DEFAULTS.items():
@@ -470,6 +643,8 @@ class PrmGUI(tk.Tk):
         text_fg = THEMES[self.theme_name]["preview_fg"]
 
         t = tk.Text(frame, wrap=tk.NONE, bg=text_bg, fg=text_fg, insertbackground=text_fg,
+                selectbackground=THEMES[self.theme_name]["select_bg"],
+                selectforeground=THEMES[self.theme_name]["select_fg"],
                     font=("Consolas", 10), relief=tk.FLAT)
         t.insert("1.0", txt)
         t.config(state=tk.DISABLED)
@@ -518,28 +693,34 @@ class PrmGUI(tk.Tk):
         try:
             ptype = self.vars["Problem"]["type"]["var"].get().strip().lower()
         except Exception:
-            ptype = "Physical"
+            ptype = "physical"
 
         exact_keys = ["u_exact_expr", "v_exact_expr", "f_exact_expr"]
         expr_keys = ["u0_expr", "v0_expr", "f_expr"]
 
         for k in exact_keys:
             widget = self.vars["Problem"][k]["widget"]
+            reason_lbl = self.vars["Problem"][k]["reason_label"]
             try:
-                if ptype == "MMS":
+                if ptype == "mms":
                     widget.configure(state="normal")
+                    reason_lbl.configure(text="")
                 else:
                     widget.configure(state="disabled")
+                    reason_lbl.configure(text="Enabled only for MMS")
             except Exception:
                 pass
 
         for k in expr_keys:
             widget = self.vars["Problem"][k]["widget"]
+            reason_lbl = self.vars["Problem"][k]["reason_label"]
             try:
-                if ptype == "Expr":
+                if ptype == "expr":
                     widget.configure(state="normal")
+                    reason_lbl.configure(text="")
                 else:
                     widget.configure(state="disabled")
+                    reason_lbl.configure(text="Enabled only for Expr")
             except Exception:
                 pass
 
@@ -547,15 +728,18 @@ class PrmGUI(tk.Tk):
         try:
             btype = self.vars["Boundary condition"]["type"]["var"].get().strip().lower()
         except Exception:
-            btype = "Zero"
+            btype = "zero"
 
         for key in ("g_expr", "v_expr"):
             widget = self.vars["Boundary condition"][key]["widget"]
+            reason_lbl = self.vars["Boundary condition"][key]["reason_label"]
             try:
-                if btype == "Expr":
+                if btype == "expr":
                     widget.configure(state="normal")
+                    reason_lbl.configure(text="")
                 else:
                     widget.configure(state="disabled")
+                    reason_lbl.configure(text="Enabled only for Expr")
             except Exception:
                 pass
 
@@ -565,11 +749,14 @@ class PrmGUI(tk.Tk):
         except Exception:
             compute = False
         err_widget = self.vars["Output"]["error_file"]["widget"]
+        err_reason = self.vars["Output"]["error_file"]["reason_label"]
         try:
             if compute:
                 err_widget.configure(state="normal")
+                err_reason.configure(text="")
             else:
                 err_widget.configure(state="disabled")
+                err_reason.configure(text="Enable compute_error")
         except Exception:
             pass
 
@@ -581,11 +768,14 @@ class PrmGUI(tk.Tk):
 
         # convergence_study checkbox itself should only be interactive in MMS mode
         conv_chk = self.vars["Output"]["convergence_study"]["widget"]
+        conv_reason = self.vars["Output"]["convergence_study"]["reason_label"]
         try:
-            if ptype == "MMS":
+            if ptype == "mms":
                 conv_chk.configure(state="normal")
+                conv_reason.configure(text="")
             else:
                 conv_chk.configure(state="disabled")
+                conv_reason.configure(text="Requires Problem.type = MMS")
                 # also force it off when not MMS, to avoid saving misleading configs
                 if conv_enabled:
                     self.vars["Output"]["convergence_study"]["var"].set(False)
@@ -594,26 +784,71 @@ class PrmGUI(tk.Tk):
             pass
 
         conv_type_widget = self.vars["Output"]["convergence_type"]["widget"]
+        conv_type_reason = self.vars["Output"]["convergence_type"]["reason_label"]
         try:
-            if ptype == "MMS" and conv_enabled:
+            if ptype == "mms" and conv_enabled:
                 conv_type_widget.configure(state="readonly")
+                conv_type_reason.configure(text="")
             else:
                 conv_type_widget.configure(state="disabled")
+                if ptype != "mms":
+                    conv_type_reason.configure(text="Requires Problem.type = MMS")
+                else:
+                    conv_type_reason.configure(text="Enable convergence_study")
         except Exception:
             pass
 
         # Output.convergence_csv rules
         try:
             conv_csv_widget = self.vars["Output"]["convergence_csv"]["widget"]
-            if ptype == "MMS" and conv_enabled:
+            conv_csv_reason = self.vars["Output"]["convergence_csv"]["reason_label"]
+            if ptype == "mms" and conv_enabled:
                 conv_csv_widget.configure(state="normal")
+                conv_csv_reason.configure(text="")
             else:
                 conv_csv_widget.configure(state="disabled")
+                if ptype != "mms":
+                    conv_csv_reason.configure(text="Requires Problem.type = MMS")
+                else:
+                    conv_csv_reason.configure(text="Enable convergence_study")
                 # clear it when disabled to avoid populating it inadvertently
                 if self.vars["Output"]["convergence_csv"]["var"].get():
                     self.vars["Output"]["convergence_csv"]["var"].set("")
         except Exception:
             pass
+
+        # Keep path pickers in sync with their entry state
+        for sec, kv in self.vars.items():
+            for key, record in kv.items():
+                try:
+                    state = str(record["widget"].cget("state"))
+                    enabled = state != "disabled"
+                except Exception:
+                    enabled = True
+
+                if record.get("is_bool"):
+                    try:
+                        record["widget"].configure(selectcolor=THEMES[self.theme_name]["entry"] if enabled else THEMES[self.theme_name]["disabled_entry"])
+                    except Exception:
+                        pass
+
+                lbl = record.get("label")
+                if lbl is not None:
+                    try:
+                        lbl.configure(style="Field.TLabel" if enabled else "FieldDisabled.TLabel")
+                    except Exception:
+                        pass
+
+                pick_btn = record.get("pick_btn")
+                if pick_btn is None:
+                    continue
+                try:
+                    if enabled:
+                        pick_btn.grid()
+                    else:
+                        pick_btn.grid_remove()
+                except Exception:
+                    pass
 
     def validate_before_save(self, params: dict):
         """Return (ok, message). Validate required fields based on rules."""
