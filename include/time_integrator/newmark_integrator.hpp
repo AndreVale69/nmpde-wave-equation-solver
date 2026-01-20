@@ -14,6 +14,10 @@ public:
     explicit NewmarkIntegrator(const double beta_ = 0.25, const double gamma_ = 0.50)
         : beta(beta_), gamma(gamma_) {}
 
+    [[nodiscard]] std::string get_parameters_info() const override {
+        return "beta = " + std::to_string(beta) + ", gamma = " + std::to_string(gamma);
+    }
+
     void initialize(const TrilinosWrappers::SparseMatrix &M,
                     const TrilinosWrappers::SparseMatrix &K,
                     const TrilinosWrappers::MPI::Vector  &U0,

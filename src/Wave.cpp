@@ -470,6 +470,7 @@ void Wave::do_solve() {
     pcout << "  Number of steps    = " << static_cast<unsigned int>(std::ceil(T / deltat))
           << std::endl;
     pcout << "  Time scheme        = " << to_string(time_scheme) << std::endl;
+    pcout << "  Time scheme const  = " << time_integrator->get_parameters_info() << std::endl;
     pcout << "  Output every       = " << output_every << " steps" << std::endl;
     pcout << "-----------------------------------------------" << std::endl;
     ProgressBar progress(

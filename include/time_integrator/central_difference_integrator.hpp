@@ -12,6 +12,10 @@ class CentralDifferenceIntegrator : public TimeIntegrator {
 public:
     CentralDifferenceIntegrator() = default;
 
+    [[nodiscard]] std::string get_parameters_info() const override {
+        return "No parameters, Central Difference Method is explicit";
+    }
+
     void initialize(const TrilinosWrappers::SparseMatrix &M,
                     const TrilinosWrappers::SparseMatrix &K,
                     const TrilinosWrappers::MPI::Vector  &U0,
@@ -35,7 +39,7 @@ private:
     bool first_step = true;
 
     TrilinosWrappers::MPI::Vector U_prev; // U^{n-1}
-    TrilinosWrappers::MPI::Vector A;      // acceleration at current step
+    TrilinosWrappers::MPI::Vector A; // acceleration at current step
 
     TrilinosWrappers::MPI::Vector tmp_owned; // generic workspace
 };
