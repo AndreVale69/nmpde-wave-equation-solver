@@ -110,6 +110,16 @@ struct Parameters {
          * Ranges from 0 (explicit) to 1 (implicit).
          */
         double theta = 1.0;
+
+        /**
+         * @brief Newmark-beta parameter (used only when scheme == Newmark).
+         */
+        double beta = 0.25;
+
+        /**
+         * @brief Newmark-gamma parameter (used only when scheme == Newmark).
+         */
+        double gamma = 0.50;
         /**
          * @brief Time integration scheme to use.
          */
@@ -519,16 +529,37 @@ private:
         {
             prm.declare_entry("T", "1.0", Patterns::Double(0.0), "Final time of the simulation.");
             prm.declare_entry("dt", "0.01", Patterns::Double(0.0), "Time step size.");
-            prm.declare_entry("theta",
-                              "1.0",
-                              Patterns::Double(0.0, 1.0),
-                              "Theta parameter for the theta time integration scheme.");
             prm.declare_entry("scheme",
                               to_string(TimeScheme::Theta),
                               Patterns::Selection(kSelectionTimeScheme),
                               "Time integration scheme to use: '" + to_string(TimeScheme::Theta) +
                                       "', '" + to_string(TimeScheme::CentralDifference) +
                                       "', or '" + to_string(TimeScheme::Newmark) + "'.");
+
+            // Scheme-specific subsection: Theta
+            prm.enter_subsection("Theta");
+            {
+                prm.declare_entry(
+                        "theta",
+                        "1.0",
+                        Patterns::Double(0.0, 1.0),
+                        "Theta parameter for the theta scheme (only used when scheme='Theta').");
+            }
+            prm.leave_subsection();
+
+            // Scheme-specific subsection: Newmark
+            prm.enter_subsection("Newmark");
+            {
+                prm.declare_entry("beta",
+                                  "0.25",
+                                  Patterns::Double(0.0),
+                                  "Newmark-beta parameter (only used when scheme='Newmark').");
+                prm.declare_entry("gamma",
+                                  "0.50",
+                                  Patterns::Double(0.0),
+                                  "Newmark-gamma parameter (only used when scheme='Newmark').");
+            }
+            prm.leave_subsection();
         }
         prm.leave_subsection();
 
@@ -651,8 +682,36 @@ private:
         {
             time.T      = prm.get_double("T");
             time.dt     = prm.get_double("dt");
-            time.theta  = prm.get_double("theta");
             time.scheme = time_scheme_from_string(prm.get("scheme"));
+
+            // Read scheme-specific parameters.
+            double theta_sub = time.theta; // default fallback
+            prm.enter_subsection("Theta");
+            {
+                theta_sub = prm.get_double("theta");
+            }
+            prm.leave_subsection();
+
+            double beta_sub  = time.beta;
+            double gamma_sub = time.gamma;
+            prm.enter_subsection("Newmark");
+            {
+                beta_sub  = prm.get_double("beta");
+                gamma_sub = prm.get_double("gamma");
+            }
+            prm.leave_subsection();
+
+            // Apply based on scheme
+            time.theta = theta_sub;
+            time.beta  = beta_sub;
+            time.gamma = gamma_sub;
+
+            // Extra note: Central Difference has no scheme parameters.
+            if (time.scheme == TimeScheme::CentralDifference) {
+                pcout << "Note: scheme='" << time.scheme
+                      << "' (Central Difference) does not use extra scheme-specific parameters."
+                      << std::endl;
+            }
         }
         prm.leave_subsection();
 

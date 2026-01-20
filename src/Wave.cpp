@@ -149,7 +149,8 @@ void Wave::setup() {
 
         case TimeScheme::Newmark:
             pcout << "Initializing the Newmark time integrator" << std::endl;
-            time_integrator = std::make_unique<NewmarkIntegrator>(); // beta=1/4, gamma=1/2
+            time_integrator = std::make_unique<NewmarkIntegrator>(parameters->time.beta,
+                                                                  parameters->time.gamma);
             break;
 
         default:
