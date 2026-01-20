@@ -90,8 +90,10 @@ DEFAULTS = {
     "Time": {
         "T": "1.0",
         "dt": "0.01",
-        "theta": "1.0",
         "scheme": "Theta",
+        "theta": "1.0",
+        "beta": "0.25",
+        "gamma": "0.50",
     },
     "Output": {
         "every": "1",
@@ -137,8 +139,10 @@ HELP = {
     # Time
     ("Time", "T"): "Final time of the simulation (real number). The simulation runs from t=0 to t=T.",
     ("Time", "dt"): "Time step size. Choose dt small enough for stability and accuracy (depends on scheme and mesh).",
-    ("Time", "theta"): "Theta parameter for the theta scheme: 0 explicit, 0.5 Crank-Nicolson, 1 implicit/backward Euler.",
     ("Time", "scheme"): "Time integration scheme: 'Theta' (general theta method), 'CentralDifference', or 'Newmark'.",
+    ("Time", "theta"): "Theta parameter for the theta scheme: 0 explicit, 0.5 Crank-Nicolson, 1 implicit/backward Euler. Used only when Time.scheme='Theta'.",
+    ("Time", "beta"): "Newmark-beta parameter (used only when Time.scheme='Newmark').",
+    ("Time", "gamma"): "Newmark-gamma parameter (used only when Time.scheme='Newmark').",
 
     # Output
     ("Output", "every"): "Write VTK output every N time steps (integer). Set to 1 to write every step.",
@@ -205,11 +209,17 @@ def parse_prm_file(path: Path):
     - Case-insensitive for keywords `subsection` and `set`.
     - Strips surrounding quotes from values.
     - Removes trailing comments introduced with `#` or `//`.
+
+    Supports nested sections by representing them as 'Parent/Child' in the returned dict.
     """
     data = {}
-    section = None
+    section_stack = []
     set_re = re.compile(r"^\s*set\s+(\S+)\s*=\s*(.*)$", flags=re.IGNORECASE)
     sub_re = re.compile(r"^\s*subsection\s+(.+)$", flags=re.IGNORECASE)
+
+    def current_section_name():
+        return "/".join(section_stack) if section_stack else None
+
     with path.open() as f:
         for raw in f:
             line = raw.strip()
@@ -225,20 +235,25 @@ def parse_prm_file(path: Path):
 
             m = sub_re.match(line)
             if m:
-                section = m.group(1).strip()
+                sec = m.group(1).strip()
                 # strip surrounding quotes from section name
-                if (section.startswith('"') and section.endswith('"')) or (
-                        section.startswith("'") and section.endswith("'")):
-                    section = section[1:-1]
-                data[section] = {}
+                if (sec.startswith('"') and sec.endswith('"')) or (
+                        sec.startswith("'") and sec.endswith("'")):
+                    sec = sec[1:-1]
+                section_stack.append(sec)
+                full = current_section_name()
+                if full not in data:
+                    data[full] = {}
                 continue
 
             if line.lower() == "end":
-                section = None
+                if section_stack:
+                    section_stack.pop()
                 continue
 
             m = set_re.match(line)
-            if m and section is not None:
+            sec_name = current_section_name()
+            if m and sec_name is not None:
                 key = m.group(1).strip()
                 val = m.group(2).strip()
                 # strip possible surrounding quotes
@@ -247,7 +262,7 @@ def parse_prm_file(path: Path):
                 # convert booleans
                 if isinstance(val, str) and val.lower() in ("true", "false"):
                     val = val.lower() == "true"
-                data[section][key] = val
+                data.setdefault(sec_name, {})[key] = val
 
     return data
 
@@ -500,6 +515,8 @@ class PrmGUI(tk.Tk):
                     var.trace_add("write", lambda *a: self.update_widget_states())
                 if section == "Output" and key == "convergence_study":
                     var.trace_add("write", lambda *a: self.update_widget_states())
+                if section == "Time" and key == "scheme":
+                    var.trace_add("write", lambda *a: self.update_widget_states())
 
                 # add small info button when help text is available
                 if (section, key) in HELP:
@@ -616,16 +633,43 @@ class PrmGUI(tk.Tk):
 
     def format_prm(self, params: dict):
         lines = []
+
+        # Special handling for Time: emit nested subsections for scheme parameters.
         for sec, kv in params.items():
-            lines.append(f"subsection {sec}")
-            for k, v in kv.items():
-                if isinstance(v, bool):
-                    sval = "true" if v else "false"
-                else:
-                    sval = v
-                lines.append(f"  set {k} = {sval}")
+            if sec != "Time":
+                lines.append(f"subsection {sec}")
+                for k, v in kv.items():
+                    if isinstance(v, bool):
+                        sval = "true" if v else "false"
+                    else:
+                        sval = v
+                    lines.append(f"  set {k} = {sval}")
+                lines.append("end")
+                lines.append("")
+                continue
+
+            # Time section
+            scheme = str(kv.get("scheme", "Theta")).strip()
+            lines.append("subsection Time")
+            for k in ("T", "dt", "scheme"):
+                if k in kv:
+                    lines.append(f"  set {k} = {kv[k]}")
+
+            if scheme.lower() == "theta":
+                lines.append("")
+                lines.append("  subsection Theta")
+                lines.append(f"    set theta = {kv.get('theta', '')}")
+                lines.append("  end")
+            elif scheme.lower() == "newmark":
+                lines.append("")
+                lines.append("  subsection Newmark")
+                lines.append(f"    set beta = {kv.get('beta', '')}")
+                lines.append(f"    set gamma = {kv.get('gamma', '')}")
+                lines.append("  end")
+
             lines.append("end")
             lines.append("")
+
         return "\n".join(lines)
 
     def preview(self):
@@ -685,6 +729,7 @@ class PrmGUI(tk.Tk):
         Rules implemented:
         - Problem.type: 'MMS' -> enable exact_* fields, disable expr fields; 'Expr' -> enable expr fields, disable exact; 'Physical' -> disable both groups.
         - Boundary condition.type: 'Expr' -> enable g_expr and v_expr; otherwise disable them.
+        - Time.scheme: enable theta only for Theta; enable beta/gamma only for Newmark; disable all three for CentralDifference.
         - Output.compute_error: when false -> disable error_file, when true -> enable.
         - Output.convergence_study: only enabled when Problem.type == 'MMS'; when enabled -> enable convergence_type, else disable.
         - Output.convergence_csv: only enabled when Problem.type == 'MMS' and Output.convergence_study is true.
@@ -814,6 +859,54 @@ class PrmGUI(tk.Tk):
                 # clear it when disabled to avoid populating it inadvertently
                 if self.vars["Output"]["convergence_csv"]["var"].get():
                     self.vars["Output"]["convergence_csv"]["var"].set("")
+        except Exception:
+            pass
+
+        # -------------------- Time.scheme rules --------------------
+        try:
+            tscheme = self.vars["Time"]["scheme"]["var"].get().strip().lower()
+        except Exception:
+            tscheme = "theta"
+
+        def _set_enabled(section: str, key: str, enabled: bool, reason: str = ""):
+            """Keep the row visible, but enable/disable the input widget."""
+            if section not in self.vars or key not in self.vars[section]:
+                return
+            rec = self.vars[section][key]
+            w = rec.get("widget")
+            reason_lbl = rec.get("reason_label")
+
+            try:
+                if enabled:
+                    # combobox uses readonly; entries use normal
+                    if isinstance(w, ttk.Combobox):
+                        w.configure(state="readonly")
+                    else:
+                        w.configure(state="normal")
+                    if reason_lbl is not None:
+                        reason_lbl.configure(text="")
+                else:
+                    w.configure(state="disabled")
+                    if reason_lbl is not None:
+                        reason_lbl.configure(text=reason)
+            except Exception:
+                pass
+
+        is_theta   = (tscheme == "theta")
+        is_newmark = (tscheme == "newmark")
+        is_cd      = (tscheme == "centraldifference")
+
+        _set_enabled("Time", "theta", enabled=is_theta, reason="Used only for Theta")
+        _set_enabled("Time", "beta", enabled=is_newmark, reason="Used only for Newmark")
+        _set_enabled("Time", "gamma", enabled=is_newmark, reason="Used only for Newmark")
+
+        # Optional hint message on the main Time tab (reuse dt's reason label)
+        try:
+            hint_lbl = self.vars["Time"]["scheme"]["reason_label"]
+            if is_cd:
+                hint_lbl.configure(text="No scheme parameters for CentralDifference")
+            else:
+                hint_lbl.configure(text="")
         except Exception:
             pass
 

@@ -10,6 +10,10 @@ class ThetaIntegrator : public TimeIntegrator {
 public:
     explicit ThetaIntegrator(double theta_) : theta(theta_) {}
 
+    [[nodiscard]] std::string get_parameters_info() const override {
+        return "theta = " + std::to_string(theta);
+    }
+
     void initialize(const TrilinosWrappers::SparseMatrix &M,
                     const TrilinosWrappers::SparseMatrix &K,
                     const TrilinosWrappers::MPI::Vector  &U0,

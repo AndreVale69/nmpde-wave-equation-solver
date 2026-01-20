@@ -35,20 +35,6 @@ private:
     const unsigned int k, l;
 };
 
-double Wave::compute_energy(const TrilinosWrappers::MPI::Vector &u_owned,
-                            const TrilinosWrappers::MPI::Vector &v_owned) const {
-    // tmp = M v
-    TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
-    mass_matrix.vmult(tmp, v_owned);
-    const double vMv = v_owned * tmp; // dot product
-
-    // tmp = K u
-    stiffness_matrix.vmult(tmp, u_owned);
-    const double uKu = u_owned * tmp;
-
-    return 0.5 * (vMv + uKu);
-}
-
 void Wave::setup() {
     pcout << "===============================================" << std::endl;
 
@@ -153,7 +139,7 @@ void Wave::setup() {
     switch (time_scheme) {
         case TimeScheme::Theta:
             pcout << "Initializing the Theta time integrator" << std::endl;
-            time_integrator = std::make_unique<ThetaIntegrator>(theta);
+            time_integrator = std::make_unique<ThetaIntegrator>(parameters->time.theta);
             break;
 
         case TimeScheme::CentralDifference:
@@ -163,7 +149,8 @@ void Wave::setup() {
 
         case TimeScheme::Newmark:
             pcout << "Initializing the Newmark time integrator" << std::endl;
-            time_integrator = std::make_unique<NewmarkIntegrator>(); // beta=1/4, gamma=1/2
+            time_integrator = std::make_unique<NewmarkIntegrator>(parameters->time.beta,
+                                                                  parameters->time.gamma);
             break;
 
         default:
@@ -177,6 +164,30 @@ void Wave::solve() {
         return convergence();
     }
     do_solve();
+}
+
+double Wave::compute_energy(const TrilinosWrappers::MPI::Vector &u_owned,
+                            const TrilinosWrappers::MPI::Vector &v_owned) const {
+    // tmp = M v
+    TrilinosWrappers::MPI::Vector tmp(locally_owned_dofs, MPI_COMM_WORLD);
+    mass_matrix.vmult(tmp, v_owned);
+    const double vMv = v_owned * tmp; // dot product
+
+    // tmp = K u
+    stiffness_matrix.vmult(tmp, u_owned);
+    const double uKu = u_owned * tmp;
+
+    return 0.5 * (vMv + uKu);
+}
+
+std::map<types::global_dof_index, double> Wave::build_zero_dirichlet_map() const {
+    std::map<types::global_dof_index, double> bv;
+    Functions::ZeroFunction<dim>              zero;
+
+    for (const auto id: boundary_ids)
+        VectorTools::interpolate_boundary_values(dof_handler, id, zero, bv);
+
+    return bv;
 }
 
 void Wave::assemble_matrices() {
@@ -320,6 +331,7 @@ void Wave::output(const unsigned int &time_step) const {
     data_out.write_vtu_with_pvtu_record(vtk_dir, "output", time_step, MPI_COMM_WORLD, 3);
 }
 
+
 void Wave::do_solve() {
     assemble_matrices();
 
@@ -458,6 +470,7 @@ void Wave::do_solve() {
     pcout << "  Number of steps    = " << static_cast<unsigned int>(std::ceil(T / deltat))
           << std::endl;
     pcout << "  Time scheme        = " << to_string(time_scheme) << std::endl;
+    pcout << "  Time scheme const  = " << time_integrator->get_parameters_info() << std::endl;
     pcout << "  Output every       = " << output_every << " steps" << std::endl;
     pcout << "-----------------------------------------------" << std::endl;
     ProgressBar progress(
@@ -582,8 +595,7 @@ void Wave::do_solve() {
     }
 }
 
-
-void Wave::convergence() {
+void Wave::convergence() const {
     using dealii::ConvergenceTable;
 
     AssertThrow(parameters->problem.type == ProblemType::MMS,
@@ -1345,14 +1357,4 @@ void Wave::process_mesh_input() {
         AssertThrow(false,
                     ExcMessage(std::string("Exception while processing mesh input: ") + e.what()));
     }
-}
-
-std::map<types::global_dof_index, double> Wave::build_zero_dirichlet_map() const {
-    std::map<types::global_dof_index, double> bv;
-    Functions::ZeroFunction<dim>              zero;
-
-    for (const auto id: boundary_ids)
-        VectorTools::interpolate_boundary_values(dof_handler, id, zero, bv);
-
-    return bv;
 }

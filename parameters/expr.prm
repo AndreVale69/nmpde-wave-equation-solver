@@ -18,8 +18,11 @@ end
 subsection Time
   set T      = 1.0
   set dt     = 0.01
-  set theta  = 1.0
   set scheme = Theta
+
+  subsection Theta
+    set theta = 1.0
+  end
 end
 
 subsection Output
