@@ -81,7 +81,7 @@ You'll produce a `.prm` file with standard blocks like:
 
 The GUI prevents typos and keeps values consistent with the solver's expected ranges/options.
 
-https://github.com/user-attachments/assets/85891b8e-d7e4-408a-852f-a9802e2a3e52
+https://github.com/user-attachments/assets/1694f8b2-eb7c-4430-a62c-5489dca0a6cf
 
 ### 2) Run the solver + choose where to save errors
 
