@@ -71,11 +71,13 @@ void ThetaIntegrator::advance(const double                                     t
     K.vmult(KU, U);
     rhs.add(-1.0, KU);
 
-    const unsigned int max_it  = 20000; // << prima era 5000
-    const double       rel_tol = 1e-8; // << per output/ParaView va benissimo
+    const unsigned int max_it        = 20000;
+    const double       rel_reduction = 1e-8; // stop when ||r_k|| <= rel_reduction * ||r_0||
+    const double       abs_tol       = 1e-14 * rhs.l2_norm(); // or when ||r_k|| <= abs_tol
 
     // Solve: C_LHS * V^{n+1} = rhs
-    SolverControl                                              solver_control(max_it, rel_tol);
+    // Stops: when either abs_tol or rel_reduction is met
+    ReductionControl solver_control(max_it, abs_tol, rel_reduction);
     SolverGMRES<TrilinosWrappers::MPI::Vector>::AdditionalData gmres_data;
     // Set maximum number of temporary vectors for GMRES
     gmres_data.max_n_tmp_vectors = 50;
