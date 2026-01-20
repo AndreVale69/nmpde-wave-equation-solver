@@ -26,7 +26,7 @@ struct Parameters {
         /**
          * @brief Type of problem to solve.
          */
-        ProblemType type = ProblemType::Physical;
+        ProblemType type = ProblemType::Expr;
         /**
          * @brief Initial displacement expression (for expression-based problems).
          */
@@ -271,10 +271,9 @@ struct Parameters {
             pcout << "    Initializing the forcing term" << std::endl;
             if (problem.type == ProblemType::MMS) {
                 forcing_term.initialize(vars, problem.f_exact_expr, constants, true);
-            } else if (problem.type == ProblemType::Expr) {
-                forcing_term.initialize(vars, problem.f_expr, constants, true);
             } else {
-                forcing_term.initialize(vars, "0", constants, true);
+                // Expr
+                forcing_term.initialize(vars, problem.f_expr, constants, true);
             }
         }
 
@@ -315,10 +314,9 @@ struct Parameters {
             pcout << "    Initializing the initial condition" << std::endl;
             if (problem.type == ProblemType::MMS) {
                 u_0.initialize(vars, problem.u_exact_expr, constants, true);
-            } else if (problem.type == ProblemType::Expr) {
-                u_0.initialize(vars, problem.u0_expr, constants, true);
             } else {
-                u_0.initialize(vars, "0", constants, true);
+                // Expr
+                u_0.initialize(vars, problem.u0_expr, constants, true);
             }
         }
 
@@ -327,10 +325,9 @@ struct Parameters {
             pcout << "    Initializing the initial velocity" << std::endl;
             if (problem.type == ProblemType::MMS) {
                 v_0.initialize(vars, problem.v_exact_expr, constants, true);
-            } else if (problem.type == ProblemType::Expr) {
-                v_0.initialize(vars, problem.v0_expr, constants, true);
             } else {
-                v_0.initialize(vars, "0", constants, true);
+                // Expr
+                v_0.initialize(vars, problem.v0_expr, constants, true);
             }
         }
     }
@@ -421,8 +418,7 @@ private:
      * Lists all available problem types.
      * Used for parameter validation in deal.II's ParameterHandler.
      */
-    inline static const std::string kSelectionProblemType = to_string(ProblemType::Physical) + "|" +
-                                                            to_string(ProblemType::MMS) + "|" +
+    inline static const std::string kSelectionProblemType = to_string(ProblemType::MMS) + "|" +
                                                             to_string(ProblemType::Expr);
 
     /**
@@ -447,12 +443,10 @@ private:
         prm.enter_subsection("Problem");
         {
             prm.declare_entry("type",
-                              to_string(ProblemType::Physical),
+                              to_string(ProblemType::Expr),
                               Patterns::Selection(kSelectionProblemType),
-                              "Type of problem to solve: '" + to_string(ProblemType::Physical) +
-                                      "' for physical problem, '" + to_string(ProblemType::MMS) +
-                                      "' for manufactured solution, '" +
-                                      to_string(ProblemType::Expr) +
+                              "Type of problem to solve: '" + to_string(ProblemType::MMS) +
+                                      "' for manufactured solution, '" + to_string(ProblemType::Expr) +
                                       "' for expression-based problem.");
 
             // MMS-based problem entries

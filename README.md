@@ -212,7 +212,7 @@ The build outputs the executable in:
 
 ### Run
 
-Physical run (default example parameter file):
+Expr run (default example parameter file):
 ```bash
 mpirun -np 4 ./build/nm4pde-lab/nm4pde parameters/wave.prm
 ```
@@ -239,7 +239,7 @@ python3 tools/prm_gui.py
 ```
 
 Typical flow:
-1. Pick `Problem.type` (`physical`, `mms`, or `expr`).
+1. Pick `Problem.type` (`mms` or `expr`).
 2. Choose a mesh (`Mesh.mesh_file`) and polynomial degree (`Mesh.degree`).
 3. Set time stepping (`Time.T`, `Time.dt`, `Time.theta`, `Time.scheme`).
 4. Set output:
@@ -273,7 +273,7 @@ Parameters are parsed via deal.II `ParameterHandler` (see `include/parameters.hp
 They are grouped into subsections.
 
 ### Problem
-- `type` (selection): `physical | mms | expr`
+- `type` (selection): `mms | expr`
 - `u_exact_expr`, `v_exact_expr`, `f_exact_expr` (strings, MMS)
 - `u0_expr`, `v0_expr`, `f_expr` (strings, expression-based)
 - `mu_expr` (string): coefficient (default `1`)

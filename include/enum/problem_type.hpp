@@ -15,7 +15,7 @@
 /**
  * @brief Enumeration of available problem types.
  */
-enum class ProblemType : char { Physical, MMS, Expr };
+enum class ProblemType : char { MMS, Expr };
 
 /**
  * @brief Convert ProblemType enum to string for output.

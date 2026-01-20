@@ -69,7 +69,7 @@ THEMES = {
 
 DEFAULTS = {
     "Problem": {
-        "type": "Physical",
+        "type": "Expr",
         "u_exact_expr": "<manufactured_u0_expr>",
         "v_exact_expr": "<manufactured_v0_expr>",
         "f_exact_expr": "<manufactured_f_expr>",
@@ -110,7 +110,7 @@ DEFAULTS = {
 
 # Predefined choice lists and help texts for specific parameters
 CHOICES = {
-    ("Problem", "type"): ["Physical", "MMS", "Expr"],
+    ("Problem", "type"): ["MMS", "Expr"],
     ("Boundary condition", "type"): ["Zero", "MMS", "Expr"],
     ("Time", "scheme"): ["Theta", "CentralDifference", "Newmark"],
     ("Output", "convergence_type"): ["Time", "Space"],
@@ -118,7 +118,7 @@ CHOICES = {
 
 HELP = {
     # Problem
-    ("Problem", "type"): "Choose problem type: 'Physical' runs the physical problem; 'MMS' uses the manufactured solution (useful for error checks); 'Expr' lets you provide expressions for initial/forcing terms.",
+    ("Problem", "type"): "Choose problem type: 'MMS' uses the manufactured solution (useful for error checks); 'Expr' lets you provide expressions for initial/forcing terms.",
     ("Problem", "u_exact_expr"): "Exact initial displacement expression (used for MMS). Provide a function of x,y,t matching the manufactured solution at t=0.",
     ("Problem", "v_exact_expr"): "Exact initial velocity expression (used for MMS). Provide du_ex/dt at t=0 if using MMS.",
     ("Problem", "f_exact_expr"): "Exact forcing term (used for MMS). For MMS tests this is the analytic RHS matching the manufactured solution.",
@@ -727,7 +727,7 @@ class PrmGUI(tk.Tk):
         """Enable/disable widgets based on dependency rules.
 
         Rules implemented:
-        - Problem.type: 'MMS' -> enable exact_* fields, disable expr fields; 'Expr' -> enable expr fields, disable exact; 'Physical' -> disable both groups.
+        - Problem.type: 'MMS' -> enable exact_* fields, disable expr fields; 'Expr' -> enable expr fields, disable exact.
         - Boundary condition.type: 'Expr' -> enable g_expr and v_expr; otherwise disable them.
         - Time.scheme: enable theta only for Theta; enable beta/gamma only for Newmark; disable all three for CentralDifference.
         - Output.compute_error: when false -> disable error_file, when true -> enable.
@@ -738,7 +738,7 @@ class PrmGUI(tk.Tk):
         try:
             ptype = self.vars["Problem"]["type"]["var"].get().strip().lower()
         except Exception:
-            ptype = "physical"
+            ptype = "expr"
 
         exact_keys = ["u_exact_expr", "v_exact_expr", "f_exact_expr"]
         expr_keys = ["u0_expr", "v0_expr", "f_expr"]
@@ -946,7 +946,7 @@ class PrmGUI(tk.Tk):
     def validate_before_save(self, params: dict):
         """Return (ok, message). Validate required fields based on rules."""
         # Problem type
-        ptype = params.get("Problem", {}).get("type", "Physical").strip().lower()
+        ptype = params.get("Problem", {}).get("type", "Expr").strip().lower()
         if ptype == "MMS":
             for k in ("u_exact_expr", "v_exact_expr", "f_exact_expr"):
                 if not params.get("Problem", {}).get(k):
