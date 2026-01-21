@@ -28,9 +28,12 @@ subsection Output
   set every = 1
   set enable_progress_bar = true
   set compute_error = false
+  set error_file = convergence-dt0_01/convergence-dt0_01.csv
+  set vtk_directory = convergence-dt0_01
+end
+
+subsection Study
   set convergence_study = true
   set convergence_type = Space
   set convergence_csv = results/space_convergence/crank_nicolson/h0_01.csv
-  set error_file = convergence-dt0_01/convergence-dt0_01.csv
-  set vtk_directory = convergence-dt0_01
 end

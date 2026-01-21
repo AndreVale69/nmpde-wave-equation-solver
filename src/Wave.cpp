@@ -160,7 +160,7 @@ void Wave::setup() {
 
 void Wave::solve() {
     // If convergence study is requested, run it instead of normal solve.
-    if (parameters->output.convergence_study) {
+    if (parameters->study.convergence_study) {
         return convergence();
     }
     do_solve();
@@ -601,7 +601,7 @@ void Wave::convergence() const {
     AssertThrow(parameters->problem.type == ProblemType::MMS,
                 ExcMessage("Convergence study requires MMS (exact solution)."));
 
-    if (parameters->output.convergence_type == ConvergenceType::Time) {
+    if (parameters->study.convergence_type == ConvergenceType::Time) {
         pcout << "Running time convergence study..." << std::endl;
         const auto rows = run_time_convergence(parameters_file,
                                                {0.2, 0.15, 0.1, 0.075, 0.05, 0.025, 0.01, 0.005});
@@ -638,14 +638,14 @@ void Wave::convergence() const {
 
         if (mpi_rank == 0) {
             table.write_text(std::cout);
-            if (!parameters->output.convergence_csv.empty()) {
-                write_time_convergence_csv(parameters->output.convergence_csv, rows);
+            if (!parameters->study.convergence_csv.empty()) {
+                write_time_convergence_csv(parameters->study.convergence_csv, rows);
             }
         }
 
         return;
     }
-    if (parameters->output.convergence_type == ConvergenceType::Space) {
+    if (parameters->study.convergence_type == ConvergenceType::Space) {
         pcout << "Running space convergence study..." << std::endl;
 
         const auto rows = run_space_convergence(parameters_file,
@@ -689,8 +689,8 @@ void Wave::convergence() const {
 
         if (mpi_rank == 0) {
             table.write_text(std::cout);
-            if (!parameters->output.convergence_csv.empty()) {
-                write_space_convergence_csv(parameters->output.convergence_csv, rows);
+            if (!parameters->study.convergence_csv.empty()) {
+                write_space_convergence_csv(parameters->study.convergence_csv, rows);
             }
         }
 
@@ -1012,7 +1012,7 @@ std::vector<Wave::TimeConvRow> Wave::run_time_convergence(const std::string     
         prm->time.dt                  = dt;
         prm->output.output_every      = 999999; // disable output during convergence tests
         prm->output.compute_error     = true; // enable error computation
-        prm->output.convergence_study = false; // disable extra convergence output
+        prm->study.convergence_study  = false; // disable nested convergence recursion
 
         Wave w(prm);
         w.setup();
@@ -1197,12 +1197,12 @@ Wave::run_space_convergence(const std::string                                 &p
 
     // Solve loop
     for (const auto &gm: generated) {
-        auto prm                      = std::make_shared<Parameters<dim>>(prm_base);
-        prm->time.dt                  = dt_small;
-        prm->mesh.mesh_file           = gm.msh_path;
-        prm->output.output_every      = 999999;
-        prm->output.compute_error     = true;
-        prm->output.convergence_study = false;
+        auto prm                     = std::make_shared<Parameters<dim>>(prm_base);
+        prm->time.dt                 = dt_small;
+        prm->mesh.mesh_file          = gm.msh_path;
+        prm->output.output_every     = 999999;
+        prm->output.compute_error    = true;
+        prm->study.convergence_study = false;
 
         Wave w(prm);
         w.setup();
