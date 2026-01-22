@@ -30,6 +30,7 @@ try:
     from tools.plot.markdown.dissipation_explanation import dissipation_explanation, dissipation_explanation_for_dummies
     from tools.plot.markdown.convergence_explanation import convergence_explanation, convergence_explanation_for_dummies
     from tools.plot.markdown.mms_explanation import mms_explanation, mms_explanation_for_dummies
+    from tools.plot.utils.plot_comparison import plot_compare_timeseries, compare_expander_timeseries
 except Exception:
     # Standalone layout (same folder)
     from utils.generate_markdown import ollama_generate_markdown, ollama_generate_markdown_stream
@@ -45,6 +46,10 @@ except Exception:
     from markdown.dissipation_explanation import dissipation_explanation, dissipation_explanation_for_dummies
     from markdown.convergence_explanation import convergence_explanation, convergence_explanation_for_dummies
     from markdown.mms_explanation import mms_explanation, mms_explanation_for_dummies
+    from utils.plot_comparison import plot_compare_timeseries, compare_expander_timeseries
+
+if "parsed_by_kind" not in st.session_state:
+    st.session_state["parsed_by_kind"] = {}
 
 
 # -----------------------------------------------------------------------------
@@ -223,31 +228,51 @@ if not uploaded_files:
     st.info("Upload one or more CSV files to begin.")
     st.stop()
 
+st.session_state["parsed_by_kind"] = {}
+parsed_items = []
+
+# -------------------------
+# PASS 1: parse + classify + register
+# -------------------------
 for uf in uploaded_files:
+    try:
+        df = read_csv_robust(uf.read())
+        df = normalize_columns(df)
+        res = classify_csv(df, uf.name)
+        error = None
+    except Exception as e:
+        df = None
+        res = None
+        error = f"Failed to parse CSV: {e}"
+
+    parsed_items.append({
+        "uf": uf,
+        "df": df,
+        "res": res,
+        "error": error
+    })
+
+    if error is None and res.recognized:
+        st.session_state["parsed_by_kind"].setdefault(res.kind, [])
+        st.session_state["parsed_by_kind"][res.kind].append({"name": uf.name, "df": df.copy()})
+
+for item in parsed_items:
+    uf = item["uf"]
+    df = item["df"]
+    res = item["res"]
+
     st.markdown("---")
     st.subheader(uf.name)
 
-    try:
-        df = read_csv_robust(uf.read())
-    except Exception as e:
-        st.error(f"Failed to parse CSV: {e}")
+    if item["error"] is not None:
+        st.error(item["error"])
         continue
-
-    df = normalize_columns(df)
-    res = classify_csv(df, uf.name)
 
     if not res.recognized:
         st.error("❌ Unknown CSV format (not recognized as Wave solver output)")
         st.write("Columns found:", sorted(df.columns))
         st.dataframe(df.head(50))
         continue
-
-    KIND_LABELS = {
-        "mms": "Manufactured Solution (MMS) Analysis",
-        "study_dissipation": "Energy Dissipation Study",
-        "study_modal": "Modal Analysis",
-        "conv": "Convergence Analysis",
-    }
 
     # -------------------------------------------------------------------------
     # Dispatch plotting
@@ -281,16 +306,43 @@ for uf in uploaded_files:
             st.dataframe(extrema, width='stretch')
 
         st.write("### Energy vs time")
-        st.line_chart(df.set_index("t")[["e"]])
+        # st.line_chart(df.set_index("t")[["e"]])
+        fig = plot_compare_timeseries({uf.name: df}, "t", ["e"], title="Energy vs time")
+        st.plotly_chart(fig, width="stretch")
 
         if "e_over_e0" in df.columns:
-            st.write("### E / E₀ vs time")
-            st.line_chart(df.set_index("t")[["e_over_e0"]])
+            st.write("### $E / E_0$ vs time")
+            fig = plot_compare_timeseries({uf.name: df}, "t", ["e_over_e0"], title="Normalized Energy E / E₀ vs time")
+            st.plotly_chart(fig, width="stretch")
+
+        y_cols = []
+        if "e" in df.columns:
+            y_cols.append("e")
+        if "e_over_e0" in df.columns:
+            y_cols.append("e_over_e0")
+        # Default: plot current file alone (Plotly = legend toggling)
+        if y_cols:
+            st.write("### Energy time series")
+            fig = plot_compare_timeseries({uf.name: df}, "t", y_cols, title="Energy time series")
+            st.plotly_chart(fig, width="stretch")
+
+        compare_expander_timeseries(
+            kind="study_dissipation",
+            current_name=uf.name,
+            current_df=df,
+            x_col="t",
+            y_cols=y_cols,
+            title="Energy comparison",
+            expander_label="🔁 Compare with another Energy CSV",
+            key_prefix="cmp_dissip",
+        )
+
         with st.expander("📘 What do these plots indicate?"):
             st.markdown(dissipation_explanation())
+
         with st.expander("📗 Energy dissipation analysis for dummies"):
             st.markdown(dissipation_explanation_for_dummies())
-        # AI interpretation
+
         ai_expander("Study Dissipation Analysis", res, uf)
 
     elif res.kind == "study_modal":
@@ -307,13 +359,29 @@ for uf in uploaded_files:
         st.dataframe(summary, width='stretch')
 
         st.write("### Modal amplitude and velocity")
-        st.line_chart(df.set_index("t")[["a", "adot"]])
+
+        y_cols = [c for c in ["a", "adot"] if c in df.columns]
+
+        fig = plot_compare_timeseries({uf.name: df}, "t", y_cols, title="Modal amplitude and velocity")
+        st.plotly_chart(fig, width="stretch")
+
+        compare_expander_timeseries(
+            kind="study_modal",
+            current_name=uf.name,
+            current_df=df,
+            x_col="t",
+            y_cols=y_cols,
+            title="Modal comparison",
+            expander_label="🔁 Compare with another Modal CSV",
+            key_prefix="cmp_modal",
+        )
+
         with st.expander("📘 What does this plot indicate?"):
             st.markdown(modal_explanation_text())
-        # For dummies:
+
         with st.expander("📗 Modal amplitude and velocity for dummies"):
             st.markdown(modal_explanation_for_dummies())
-        # AI interpretation
+
         ai_expander("Modal Analysis", res, uf)
 
     elif res.kind == "conv":
@@ -332,8 +400,11 @@ for uf in uploaded_files:
         }
         df_conv = df_conv.rename(columns={k: v for k, v in rename_map.items() if k in df_conv.columns})
 
-        st.write("### Convergence (log–log)")
+        x_col = "dt" if "dt" in df_conv.columns else "h"
+        y_cols = [c for c in ["u_L2", "u_H1", "v_L2"] if c in df_conv.columns]
+
         try:
+            st.write("### Convergence (log–log)")
             fig = build_convergence_figure(df_conv)
             st.plotly_chart(fig, width='stretch')
         except Exception as e:
@@ -351,12 +422,26 @@ for uf in uploaded_files:
         except Exception as e:
             st.warning(f"Could not compute per-step observed orders: {e}")
 
+        fig_simple = plot_compare_timeseries({uf.name: df_conv}, x_col, y_cols, title="Convergence curves")
+        st.plotly_chart(fig_simple, width="stretch")
+
+        compare_expander_timeseries(
+            kind="conv",
+            current_name=uf.name,
+            current_df=df_conv,
+            x_col=x_col,
+            y_cols=y_cols,
+            title="Convergence comparison",
+            expander_label="🔁 Compare with another Convergence CSV",
+            key_prefix="cmp_conv",
+        )
+
         with st.expander("📘 What do these plots indicate?"):
             st.markdown(convergence_explanation())
+
         with st.expander("📗 Convergence analysis for dummies"):
             st.markdown(convergence_explanation_for_dummies())
 
-        # AI interpretation
         ai_expander("Convergence Analysis", res, uf)
 
     elif res.kind == "mms":
@@ -376,12 +461,28 @@ for uf in uploaded_files:
         metrics = [c for c in df.columns if c.startswith("error_")]
         x = "time" if "time" in df.columns else ("t" if "t" in df.columns else res.x_candidates[0])
         st.write(f"### MMS error history vs `{x}`")
-        st.line_chart(df.set_index(x)[metrics])
+
+        # Default: plot current file alone (Plotly = legend toggling)
+        fig = plot_compare_timeseries({uf.name: df}, x, metrics, title="MMS error history")
+        st.plotly_chart(fig, width="stretch")
+
+        compare_expander_timeseries(
+            kind="mms",
+            current_name=uf.name,
+            current_df=df,
+            x_col=x,
+            y_cols=metrics,
+            title="MMS comparison",
+            expander_label="🔁 Compare with another MMS CSV",
+            key_prefix="cmp_mms",
+        )
+
         with st.expander("📘 What do these plots indicate?"):
             st.markdown(mms_explanation())
+
         with st.expander("📗 MMS analysis for dummies"):
             st.markdown(mms_explanation_for_dummies())
-        # AI interpretation
+
         ai_expander("MMS Analysis", res, uf)
 
     with st.expander("Raw data"):
