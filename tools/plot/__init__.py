@@ -4,7 +4,7 @@ This package is used by Streamlit/CLI utilities under tools/plot.
 """
 
 try:
-    from .convergence_utils import (
+    from tools.plot.utils.convergence_utils import (
         ConvergenceKind,
         FitResult,
         compute_observed_orders,
@@ -16,7 +16,7 @@ try:
     )
 except Exception:  # pragma: no cover
     # In some IDE contexts, the package root isn't resolved correctly.
-    from convergence_utils import (  # type: ignore
+    from tools.plot.utils.convergence_utils import (  # type: ignore
         ConvergenceKind,
         FitResult,
         compute_observed_orders,
