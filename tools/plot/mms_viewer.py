@@ -154,8 +154,19 @@ for uf in uploaded_files:
         st.dataframe(df.head(50))
         continue
 
-    st.success(f"✅ Recognized → **{res.kind}**")
-    st.caption(" • ".join(res.reasons))
+    KIND_LABELS = {
+        "mms": "Manufactured Solution (MMS) Analysis",
+        "study_dissipation": "Energy Dissipation Study",
+        "study_modal": "Modal Analysis",
+        "conv": "Convergence Analysis",
+    }
+
+    st.markdown(
+        f"""
+    ### {KIND_LABELS.get(res.kind, res.kind)}
+    *Automatically classified from CSV structure*
+    """
+    )
 
     # -------------------------------------------------------------------------
     # Dispatch plotting
