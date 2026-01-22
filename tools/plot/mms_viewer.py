@@ -328,8 +328,13 @@ def _ensure_canonical_schema(df: pd.DataFrame) -> pd.DataFrame:
         if old in df.columns and new not in df.columns:
             df[new] = df[old]
 
-    if "t" in df.columns and "Time" not in df.columns:
-        df = df.rename(columns={"t": "Time"})
+    # Normalize time column naming.
+    # Solver may emit `t` (studies) or `time` (error history); viewer uses `Time` in MMS mode.
+    if "Time" not in df.columns:
+        if "t" in df.columns:
+            df = df.rename(columns={"t": "Time"})
+        elif "time" in df.columns:
+            df = df.rename(columns={"time": "Time"})
 
     return df
 
@@ -430,25 +435,27 @@ def _render_what_can_i_plot_panel(*, datasets: dict[str, pd.DataFrame], context:
                 st.markdown("---")
                 continue
 
-            # MMS detection
+            # Convergence detection (do this before MMS, otherwise generic `step/time` heuristics can mislead)
+            low = {str(c).strip().lower() for c in df.columns}
+            if "h" in low or "dt" in low:
+                st.markdown("- Detected: **Convergence table** → use **Mode = Convergence**")
+                st.markdown("---")
+                continue
+
+            # MMS detection: require at least one MMS-specific metric family; time/step alone is too generic.
             mms_avail = _available_metrics(df)
             mms_fams = [k for k, v in mms_avail.items() if v]
-            has_time = ("Time" in df.columns) or ("t" in df.columns)
-            has_step = "step" in df.columns
+            has_time = ("Time" in low) or ("t" in low) or ("time" in low)
+            has_step = "step" in low
 
-            if has_time or has_step or mms_fams:
+            if mms_fams:
                 st.markdown("- Detected: **MMS / error history** → use **Mode = MMS**")
                 st.markdown(
                     f"  - X axis available: {', '.join([x for x in ['Time' if has_time else '', 'step' if has_step else ''] if x]) or '(missing time/step)'}"
                 )
-                st.markdown(f"  - Metric families available: {', '.join(mms_fams) if mms_fams else '(none detected)'}")
-                st.markdown("---")
-                continue
-
-            # Convergence detection
-            low = {str(c).strip().lower() for c in df.columns}
-            if "h" in low or "dt" in low:
-                st.markdown("- Detected: **Convergence table** → use **Mode = Convergence**")
+                st.markdown(
+                    f"  - Metric families available: {', '.join(mms_fams) if mms_fams else '(none detected)'}"
+                )
                 st.markdown("---")
                 continue
 
@@ -493,6 +500,11 @@ def render_convergence():
     # If uploader empty, keep cached files (so Move/Copy works) and just show guidance.
     if uploaded_conv:
         _ingest_uploads(uploaded_conv, target="conv")
+
+        # If the user explicitly removed files from the uploader, reflect that in this mode's cache.
+        # (We only do this when uploader is non-empty; Streamlit may reset uploaders when switching tabs.)
+        keep_names = {f.name for f in uploaded_conv}
+        _prune_cache_by_filenames("uploads_conv", keep_names)
     else:
         if not st.session_state.get("uploads_conv"):
             st.info("Upload at least one convergence CSV to start, or use the Move/Copy panel to bring one here.")
@@ -639,6 +651,10 @@ def render_studies():
 
         st.session_state.setdefault("uploads_studies", {})
         _ingest_uploads(uploaded_studies, target="studies")
+
+        # If the user explicitly removed files from the uploader, reflect that in this mode's cache.
+        # (We only do this when uploader is non-empty; Streamlit may reset uploaders when switching tabs.)
+        _prune_cache_by_filenames("uploads_studies", current_names)
     else:
         newly_added = set()
         if not st.session_state.get("uploads_studies"):
@@ -855,6 +871,10 @@ def render_mms():
         # NOTE: don't prune cached uploads based on the current uploader widget state.
         # Streamlit resets the uploader when switching modes/tabs; pruning here would orphan cached files.
         _ingest_uploads(uploaded, target="MMS")
+
+        # If the user explicitly removed files from the uploader, reflect that in this mode's cache.
+        # (We only do this when uploader is non-empty; Streamlit may reset uploaders when switching tabs.)
+        _prune_cache_by_filenames("uploads_mms", current_names)
     else:
         newly_added = set()
         if not st.session_state.get("uploads_mms"):
@@ -893,6 +913,10 @@ def render_mms():
 
     # Auto-select new files and prune removed from selection.
     _autoselect_new_files("mms_selected_files", file_names, newly_added)
+
+    # Also prune the stored selection if the user removed files from the uploader (same caveat as above).
+    if uploaded:
+        st.session_state["mms_selected_files"] = [n for n in (st.session_state.get("mms_selected_files") or []) if n in file_names]
 
     # Ensure widget state is valid for current options (fixes stale selection when last file is removed)
     _ensure_multiselect_state(
