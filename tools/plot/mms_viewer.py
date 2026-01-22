@@ -1,10 +1,8 @@
 import hashlib
 import io
-import json
 import re
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -12,6 +10,7 @@ import streamlit as st
 
 try:
     # When running from repo root
+    from tools.plot.csv_utils import read_csv_robust
     from tools.plot.convergence_utils import (
         compute_observed_orders,
         detect_kind,
@@ -21,6 +20,7 @@ try:
     )
 except Exception:  # pragma: no cover
     # When running from within tools/plot
+    from csv_utils import read_csv_robust
     from convergence_utils import (
         compute_observed_orders,
         detect_kind,
@@ -41,22 +41,105 @@ def _sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
-def _ensure_upload_cache():
-    """Initialize session-state caches used to persist uploads across reruns."""
-    st.session_state.setdefault("uploads_mms", {})   # hash -> _CachedUpload
-    st.session_state.setdefault("uploads_conv", {})  # hash -> _CachedUpload
-    st.session_state.setdefault("aliases_conv", {})  # filename -> alias
+def _mode_cache_key(mode: str) -> str:
+    mode = str(mode)
+    if mode.lower() in {"mms"}:
+        return "uploads_mms"
+    if mode.lower() in {"convergence", "conv"}:
+        return "uploads_conv"
+    if mode.lower() in {"studies", "study"}:
+        return "uploads_studies"
+    raise ValueError(f"Unknown mode: {mode}")
+
+
+def _library_add(name: str, bs: bytes) -> _CachedUpload:
+    """Add bytes to the global in-session library, returning the canonical cached object."""
+    h = _sha256_bytes(bs)
+    if h not in st.session_state["uploads_library"]:
+        st.session_state["uploads_library"][h] = _CachedUpload(name=name, content_hash=h, data=bs)
+    # Track display name (first seen wins; user can still alias in each mode)
+    st.session_state["uploads_library_display"].setdefault(h, name)
+    return st.session_state["uploads_library"][h]
+
+
+def _sync_mode_cache_from_library(mode: str):
+    """Ensure a mode cache only contains hashes that still exist in the library."""
+    key = _mode_cache_key(mode)
+    cache = st.session_state.get(key)
+    if not cache:
+        return
+    lib = st.session_state.get("uploads_library", {})
+    drop = [h for h in cache.keys() if h not in lib]
+    for h in drop:
+        cache.pop(h, None)
+
+
+def _copy_hashes_to_mode(hashes: list[str], *, mode: str):
+    key = _mode_cache_key(mode)
+    st.session_state.setdefault(key, {})
+    lib = st.session_state.get("uploads_library", {})
+    for h in hashes:
+        cu = lib.get(h)
+        if cu is None:
+            continue
+        st.session_state[key].setdefault(h, cu)
+
+
+def _remove_hashes_from_mode(hashes: list[str], *, mode: str):
+    key = _mode_cache_key(mode)
+    cache = st.session_state.get(key, {})
+    for h in hashes:
+        cache.pop(h, None)
+
+
+def _move_hashes(hashes: list[str], *, src_mode: str, dst_mode: str):
+    """Move hashes between two modes (copy to dst, remove from src)."""
+    _copy_hashes_to_mode(hashes, mode=dst_mode)
+    _remove_hashes_from_mode(hashes, mode=src_mode)
+
+
+def _prune_cache_by_filenames(cache_key: str, keep_names: set[str]):
+    """Drop cached uploads whose filename is not currently present in the uploader."""
+    cache = st.session_state.get(cache_key, {})
+    if not cache:
+        return
+    drop_hashes = [h for h, cu in cache.items() if cu.name not in keep_names]
+    for h in drop_hashes:
+        cache.pop(h, None)
+
+
+def _autoselect_new_files(selected_key: str, available: list[str], newly_added: set[str]):
+    """Update a session_state selection list by adding newly uploaded files."""
+    current = st.session_state.get(selected_key)
+    if current is None:
+        # first time: select everything
+        st.session_state[selected_key] = list(available)
+        return
+
+    # prune removed
+    current = [n for n in current if n in available]
+
+    # add new
+    for n in available:
+        if n in newly_added and n not in current:
+            current.append(n)
+
+    st.session_state[selected_key] = current
 
 
 def _ingest_uploads(uploaded_files, *, target: str):
     """Read uploaded files and persist them in session_state.
 
-    target: 'MMS' or 'conv'
+    target: 'MMS' or 'conv' or 'studies'
+
+    Notes:
+      - Every upload is also stored in a global library, so you can later copy/move
+        the same file into another mode without re-uploading.
     """
     if uploaded_files is None:
         return
 
-    key = "uploads_mms" if target == "MMS" else "uploads_conv"
+    key = _mode_cache_key(target)
 
     for f in uploaded_files:
         try:
@@ -65,51 +148,339 @@ def _ingest_uploads(uploaded_files, *, target: str):
             # Streamlit UploadedFile always supports getvalue, but keep it defensive.
             bs = f.read()
 
-        h = _sha256_bytes(bs)
-        if h not in st.session_state[key]:
-            st.session_state[key][h] = _CachedUpload(name=f.name, content_hash=h, data=bs)
+        cu = _library_add(f.name, bs)
+        if cu.content_hash not in st.session_state[key]:
+            st.session_state[key][cu.content_hash] = cu
 
 
-st.set_page_config(page_title="Wave Solver Dashboard", layout="wide")
+def _ensure_upload_cache():
+    """Initialize session-state caches used to persist uploads across reruns."""
+    st.session_state.setdefault("uploads_library", {})  # hash -> _CachedUpload
+    st.session_state.setdefault("uploads_library_display", {})  # hash -> display name
 
-st.title("Wave Solver Dashboard")
+    st.session_state.setdefault("uploads_mms", {})  # hash -> _CachedUpload
+    st.session_state.setdefault("uploads_conv", {})  # hash -> _CachedUpload
+    st.session_state.setdefault("uploads_studies", {})  # hash -> _CachedUpload
 
-# init persistence
-_ensure_upload_cache()
+    st.session_state.setdefault("aliases_conv", {})  # filename -> alias
+    st.session_state.setdefault("mms_selected_files", None)  # list[str] | None
+    st.session_state.setdefault("studies_selected_files", None)  # list[str] | None
+
+
+def _render_move_copy_panel(current_mode: str):
+    """Sidebar UI to copy/move already-uploaded files between modes.
+
+    current_mode: one of 'MMS' | 'Convergence' | 'Studies'
+
+    This works on the in-session caches, so it doesn't depend on the live uploader content.
+    """
+    # Ensure caches are consistent.
+    for m in ("MMS", "Convergence", "Studies"):
+        _sync_mode_cache_from_library(m)
+
+    cur_key = _mode_cache_key(current_mode)
+    with st.sidebar.expander("Move / copy between views", expanded=False):
+        st.caption(
+            "Accidentally uploaded a dissipation CSV in the wrong view? Use this to copy or move cached uploads "
+            "between MMS / Convergence / Studies without re-uploading."
+        )
+
+        cur_cache = st.session_state.get(cur_key, {})
+        cur_hashes = set(cur_cache.keys())
+
+        # Build a label->hash mapping so we can show duplicates safely.
+        labels = {}
+        for h, cu in st.session_state.get("uploads_library", {}).items():
+            display = st.session_state.get("uploads_library_display", {}).get(h, cu.name)
+            # include suffix to disambiguate duplicate filenames
+            label = f"{display}  {h[:8]}"
+            labels[label] = h
+
+        if not labels:
+            st.caption("No cached uploads yet.")
+            return
+
+        # Choose source and destination.
+        modes = ["MMS", "Convergence", "Studies"]
+        dst_mode = current_mode
+        src_mode = st.selectbox("Source view", options=[m for m in modes if m != dst_mode], index=0,
+                                key=f"mv_src__{dst_mode}")
+
+        src_cache = st.session_state.get(_mode_cache_key(src_mode), {})
+        src_hashes = list(src_cache.keys())
+
+        if not src_hashes:
+            st.caption(f"No cached uploads in {src_mode}.")
+            return
+
+        # Only allow selecting hashes present in the source.
+        src_options = []
+        for h in src_hashes:
+            cu = st.session_state["uploads_library"].get(h)
+            if cu is None:
+                continue
+            display = st.session_state.get("uploads_library_display", {}).get(h, cu.name)
+            src_options.append(f"{display}  {h[:8]}")
+
+        selected_labels = st.multiselect(
+            "Select file(s)",
+            options=sorted(src_options),
+            default=[],
+            key=f"mv_pick__{dst_mode}__from__{src_mode}",
+        )
+        picked = [labels[lbl] for lbl in selected_labels if lbl in labels]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f"Copy to {dst_mode}", key=f"copy__{dst_mode}__from__{src_mode}", disabled=not picked):
+                _copy_hashes_to_mode(picked, mode=dst_mode)
+                st.success(f"Copied {len(picked)} file(s) to {dst_mode}.")
+                st.rerun()
+        with col2:
+            if st.button(f"Move to {dst_mode}", key=f"move__{dst_mode}__from__{src_mode}", disabled=not picked):
+                _move_hashes(picked, src_mode=src_mode, dst_mode=dst_mode)
+                st.success(f"Moved {len(picked)} file(s) to {dst_mode}.")
+                st.rerun()
+
+        st.markdown("---")
+        st.caption("Advanced")
+        if st.button("Delete selected from library (removes from all views)", key=f"del_lib__{dst_mode}",
+                     disabled=not picked):
+            for h in picked:
+                st.session_state.get("uploads_library", {}).pop(h, None)
+                st.session_state.get("uploads_library_display", {}).pop(h, None)
+                for m in ("MMS", "Convergence", "Studies"):
+                    st.session_state.get(_mode_cache_key(m), {}).pop(h, None)
+            st.success(f"Deleted {len(picked)} file(s) from library.")
+            st.rerun()
+
 
 # ------------------------
-# Sidebar: mode selector (must be early)
+# Shared utilities
 # ------------------------
-st.sidebar.header("Mode")
-mode = st.sidebar.radio(
-    "Viewer",
-    options=["MMS", "Convergence"],
-    index=0,
-    help="Switch between MMS time-series error viewer and convergence study viewer.",
-)
-
-# Global controls for persisted uploads
-with st.sidebar.expander("Uploads (persisted)", expanded=False):
-    st.caption("Uploads are cached in-session so switching mode won't clear them.")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Clear MMS uploads"):
-            st.session_state["uploads_mms"] = {}
-            st.rerun()
-    with col_b:
-        if st.button("Clear Conv uploads"):
-            st.session_state["uploads_conv"] = {}
-            st.rerun()
-
-    st.write(f"MMS cached: {len(st.session_state['uploads_mms'])}")
-    st.write(f"Conv cached: {len(st.session_state['uploads_conv'])}")
 
 
-if mode == "Convergence":
+def _normalize_column_name(c: str) -> str:
+    if c is None:
+        return ""
+    c = str(c)
+    c = c.strip().strip('"').strip("'").strip()
+    c = re.sub(r"\s+", " ", c)
+    return c
+
+
+def _drop_spacer_columns(df: pd.DataFrame) -> pd.DataFrame:
+    drop_cols = []
+    rename_map = {}
+    for c in df.columns:
+        nc = _normalize_column_name(c)
+        if nc == "":
+            drop_cols.append(c)
+        else:
+            rename_map[c] = nc
+    df = df.rename(columns=rename_map)
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+    return df
+
+
+def _coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    for c in df.columns:
+        if c in {"step", "n"}:
+            try:
+                df[c] = pd.to_numeric(df[c])
+            except Exception:
+                pass
+            continue
+        if c in {"Time", "t"} or any(
+                str(c).startswith(p)
+                for p in (
+                        "error_",
+                        "delta_",
+                        "rel_delta_",
+                        "cum_mean_",
+                        "cum_rms_",
+                        "h",
+                        "dt",
+                        "E",
+                        "a",
+                        "adot",
+                )
+        ):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+def _ensure_canonical_schema(df: pd.DataFrame) -> pd.DataFrame:
+    alias_pairs = {
+        "error_u": "error_u_L2",
+        "error_v": "error_v_L2",
+        "delta_u": "delta_u_L2",
+        "delta_v": "delta_v_L2",
+        "rel_delta_u": "rel_delta_u_L2",
+        "rel_delta_v": "rel_delta_v_L2",
+        "cum_mean_u": "cum_mean_u_L2",
+        "cum_rms_u": "cum_rms_u_L2",
+        "cum_mean_v": "cum_mean_v_L2",
+        "cum_rms_v": "cum_rms_v_L2",
+    }
+    for old, new in alias_pairs.items():
+        if old in df.columns and new not in df.columns:
+            df[new] = df[old]
+
+    if "t" in df.columns and "Time" not in df.columns:
+        df = df.rename(columns={"t": "Time"})
+
+    return df
+
+
+def _available_metrics(df: pd.DataFrame) -> dict:
+    families = {
+        "Instantaneous": ["error_u_L2", "error_u_H1", "error_v_L2", "error_v_H1"],
+        "Cumulative": [
+            "cum_mean_u_L2",
+            "cum_rms_u_L2",
+            "cum_mean_u_H1",
+            "cum_rms_u_H1",
+            "cum_mean_v_L2",
+            "cum_rms_v_L2",
+        ],
+        "Delta": ["delta_u_L2", "delta_u_H1", "delta_v_L2", "delta_v_H1"],
+        "Rel delta": ["rel_delta_u_L2", "rel_delta_u_H1", "rel_delta_v_L2", "rel_delta_v_H1"],
+    }
+    out = {}
+    cols = set(df.columns)
+    for fam, keys in families.items():
+        out[fam] = any(k in cols for k in keys)
+    return out
+
+
+def df_with_index_to_markdown(df, index_name="metric", value_format=None):
+    cols = list(df.columns)
+    header = "| " + index_name + " | " + " | ".join(cols) + " |"
+    sep = "| --- " + " | ---" * len(cols) + " |"
+    lines = [header, sep]
+    for idx in df.index:
+        row_vals = []
+        for c in cols:
+            v = df.at[idx, c]
+            if pd.isna(v):
+                s = ""
+            else:
+                if value_format is not None:
+                    try:
+                        s = value_format(v)
+                    except Exception:
+                        s = str(v)
+                else:
+                    s = str(v)
+            row_vals.append(s)
+        lines.append("| " + str(idx) + " | " + " | ".join(row_vals) + " |")
+    return "\n".join(lines)
+
+
+def _default_palette(name: str):
+    palettes = {
+        "Default": px.colors.qualitative.Plotly,
+        "High contrast": ["#000000", "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628"],
+        "Colorblind-friendly": px.colors.qualitative.Set1,
+    }
+    return palettes.get(name, px.colors.qualitative.Plotly)
+
+
+# ------------------------
+# Convergence mode
+# ------------------------
+def _infer_study_schema(df: pd.DataFrame) -> str:
+    """Infer which solver study a CSV corresponds to."""
+    low = {str(c).strip().lower() for c in df.columns}
+    if {"n", "t", "e"}.issubset(low):
+        return "Dissipation"
+    if {"n", "t", "a", "adot"}.issubset(low):
+        return "Modal"
+    return "Unknown"
+
+
+def _render_what_can_i_plot_panel(*, datasets: dict[str, pd.DataFrame], context: str):
+    """Render a self-documenting panel describing what the uploaded files enable."""
+    with st.sidebar.expander("What can I plot?", expanded=True):
+        st.markdown(
+            "This app auto-detects what your CSV contains from its column names. "
+            "Use this panel to see which plots apply and which **Mode** to use."
+        )
+        st.caption(f"Context: {context}")
+
+        if not datasets:
+            st.caption("No CSVs loaded yet.")
+            return
+
+        for name, df in datasets.items():
+            cols = list(df.columns)
+            st.markdown(f"**{name}**")
+            st.caption(f"Columns: {', '.join(cols[:12])}{' ...' if len(cols) > 12 else ''}")
+
+            # Study detection first
+            study_kind = _infer_study_schema(df)
+            if study_kind in {"Dissipation", "Modal"}:
+                st.markdown(f"- Detected: **{study_kind}** study → use **Mode = Studies**")
+                if study_kind == "Dissipation":
+                    st.markdown("  - Plots: `E(t)` and (if present) `E/E0(t)`")
+                else:
+                    st.markdown("  - Plots: `a(t)` and `adot(t)`")
+                st.markdown("---")
+                continue
+
+            # MMS detection
+            mms_avail = _available_metrics(df)
+            mms_fams = [k for k, v in mms_avail.items() if v]
+            has_time = ("Time" in df.columns) or ("t" in df.columns)
+            has_step = "step" in df.columns
+
+            if has_time or has_step or mms_fams:
+                st.markdown("- Detected: **MMS / error history** → use **Mode = MMS**")
+                st.markdown(
+                    f"  - X axis available: {', '.join([x for x in ['Time' if has_time else '', 'step' if has_step else ''] if x]) or '(missing time/step)'}"
+                )
+                st.markdown(f"  - Metric families available: {', '.join(mms_fams) if mms_fams else '(none detected)'}")
+                st.markdown("---")
+                continue
+
+            # Convergence detection
+            low = {str(c).strip().lower() for c in df.columns}
+            if "h" in low or "dt" in low:
+                st.markdown("- Detected: **Convergence table** → use **Mode = Convergence**")
+                st.markdown("---")
+                continue
+
+            st.markdown("- Detected: **Unknown** (not a recognized solver CSV schema yet)")
+            st.markdown("---")
+
+
+def _ensure_multiselect_state(widget_key: str, *, options: list[str], desired_default: list[str]):
+    """Make Streamlit multiselect state robust when options change.
+
+    Streamlit can keep old selections in session_state even if the uploader removed a file.
+    This helper ensures the widget state is always a subset of current options; if not, it resets it.
+    """
+    desired_default = [x for x in desired_default if x in options]
+    cur = st.session_state.get(widget_key)
+    if cur is None:
+        return
+    if not isinstance(cur, list):
+        st.session_state[widget_key] = desired_default
+        return
+    if any(x not in options for x in cur):
+        st.session_state[widget_key] = desired_default
+        return
+
+
+def render_convergence():
     st.write(
-        "Upload convergence CSVs produced by the solver (`write_space_convergence_csv` / `write_time_convergence_csv`). "
+        "Upload convergence CSVs produced by the solver (space/time). "
         "You'll get log-log plots, fitted observed orders, and per-step order tables."
     )
+
+    _render_move_copy_panel("Convergence")
 
     uploaded_conv = st.file_uploader(
         "Convergence CSVs",
@@ -119,14 +490,18 @@ if mode == "Convergence":
         help="Space: h,u_L2,u_H1,v_L2,p_*.  Time: dt,u_L2,u_H1,v_L2,q_*.",
     )
 
-    # Persist new uploads
-    _ingest_uploads(uploaded_conv, target="conv")
+    # If uploader empty, keep cached files (so Move/Copy works) and just show guidance.
+    if uploaded_conv:
+        _ingest_uploads(uploaded_conv, target="conv")
+    else:
+        if not st.session_state.get("uploads_conv"):
+            st.info("Upload at least one convergence CSV to start, or use the Move/Copy panel to bring one here.")
+            st.stop()
 
     if not st.session_state["uploads_conv"]:
         st.info("Upload at least one convergence CSV to start.")
         st.stop()
 
-    # Ensure aliases exist for current uploaded filenames
     conv_names = [cu.name for cu in st.session_state["uploads_conv"].values()]
     for n in conv_names:
         st.session_state["aliases_conv"].setdefault(n, n)
@@ -156,6 +531,12 @@ if mode == "Convergence":
     if not conv_dfs:
         st.stop()
 
+    # Guidance panel based on the parsed convergence tables
+    _render_what_can_i_plot_panel(
+        datasets={df.get("__name", pd.Series(["run"])).iloc[0]: df for df in conv_dfs},
+        context="Convergence mode",
+    )
+
     kinds = sorted({df["__kind"].iloc[0] for df in conv_dfs})
     selected_kind = st.sidebar.selectbox(
         "Convergence kind",
@@ -174,7 +555,6 @@ if mode == "Convergence":
     st.subheader("Error vs resolution (log-log)")
     fig = go.Figure()
     for df in active:
-        # __name is the alias injected above
         run_name = df.get("__name", pd.Series(["run"])).iloc[0]
         for m in selected_metrics:
             if m not in df.columns:
@@ -224,759 +604,577 @@ if mode == "Convergence":
                 cols.append("mesh")
             st.dataframe(df[cols], width="stretch", hide_index=True)
 
-    st.stop()
 
-# MMS mode: existing behavior continues below
-st.write(
-    "Upload one or more CSVs (with columns like `time`, `error_u_L2`, `error_u_H1`, etc.) and compare plots."
-)
+# ------------------------
+# Studies mode
+# ------------------------
+def render_studies():
+    st.write(
+        "Upload CSVs produced by solver studies. The viewer auto-detects each file type by its columns and plots the "
+        "relevant quantities."
+    )
 
-def _normalize_column_name(c: str) -> str:
-    """Best-effort cleanup for messy CSV headers.
+    _render_move_copy_panel("Studies")
 
-    Handles cases like columns literally named "\"                            \"" or with
-    leading/trailing whitespace.
-    """
-    if c is None:
-        return ""
-    c = str(c)
-    # strip whitespace and surrounding quotes
-    c = c.strip().strip("\"").strip("'").strip()
-    # collapse internal whitespace (e.g. accidental padding)
-    c = re.sub(r"\s+", " ", c)
-    return c
+    uploaded_studies = st.file_uploader(
+        "Study CSVs",
+        type=["csv"],
+        accept_multiple_files=True,
+        key="uploader_studies",
+        help=(
+            "Dissipation: columns `n,t,E,E_over_E0`.  Modal: columns `n,t,a,adot`."
+        ),
+    )
 
+    # If uploader is empty, don't wipe caches: user might want to Move/Copy files into Studies.
+    if uploaded_studies:
+        current_names = set([f.name for f in uploaded_studies])
+        prev_names = set(st.session_state.get("_prev_studies_names", set()))
+        st.session_state["_prev_studies_names"] = current_names
+        newly_added = current_names - prev_names
 
-def _drop_spacer_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Drop columns that are empty after normalization.
-    drop_cols = []
-    rename_map = {}
-    for c in df.columns:
-        nc = _normalize_column_name(c)
-        if nc == "":
-            drop_cols.append(c)
-        else:
-            rename_map[c] = nc
-    df = df.rename(columns=rename_map)
-    if drop_cols:
-        df = df.drop(columns=drop_cols)
-    return df
+        # NOTE: don't prune cached uploads based on the current uploader widget state.
+        # Streamlit resets the uploader when switching modes/tabs; pruning here would orphan cached files
+        # (they'd still exist in the library, but disappear from this view's list and couldn't be removed).
 
+        st.session_state.setdefault("uploads_studies", {})
+        _ingest_uploads(uploaded_studies, target="studies")
+    else:
+        newly_added = set()
+        if not st.session_state.get("uploads_studies"):
+            st.info("Upload one or more study CSV files to get started, or Move/Copy existing uploads into Studies.")
+            st.stop()
 
-def _coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Convert any non-index columns that look numeric.
-    # Keep as-is for columns that can't be coerced.
-    for c in df.columns:
-        if c in {"step"}:
-            try:
-                df[c] = pd.to_numeric(df[c])
-            except Exception:
-                # leave column unchanged if conversion fails
-                pass
-            continue
-        if c in {"Time", "t"} or any(
-            c.startswith(p)
-            for p in (
-                "error_",
-                "delta_",
-                "rel_delta_",
-                "cum_mean_",
-                "cum_rms_",
-                "h",
-            )
-        ):
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
-
-
-def _ensure_canonical_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Add/alias columns so the rest of the app can rely on canonical names.
-
-    Canonical names (new):
-      - error_u_L2, error_u_H1, error_v_L2 (and optionally error_v_H1)
-      - delta_u_L2, delta_u_H1, delta_v_L2
-      - rel_delta_u_L2, rel_delta_u_H1, rel_delta_v_L2
-      - cum_mean_u_L2, cum_mean_u_H1, cum_mean_v_L2
-      - cum_rms_u_L2, cum_rms_u_H1, cum_rms_v_L2
-
-    Backward-compatibility:
-      - error_u -> error_u_L2
-      - error_v -> error_v_L2
-      - delta_u -> delta_u_L2
-      - delta_v -> delta_v_L2
-      - cum_mean_u -> cum_mean_u_L2
-      - cum_rms_u  -> cum_rms_u_L2
-      - cum_mean_v -> cum_mean_v_L2
-      - cum_rms_v  -> cum_rms_v_L2
-    """
-
-    alias_pairs = {
-        "error_u": "error_u_L2",
-        "error_v": "error_v_L2",
-        "delta_u": "delta_u_L2",
-        "delta_v": "delta_v_L2",
-        "rel_delta_u": "rel_delta_u_L2",
-        "rel_delta_v": "rel_delta_v_L2",
-        "cum_mean_u": "cum_mean_u_L2",
-        "cum_rms_u": "cum_rms_u_L2",
-        "cum_mean_v": "cum_mean_v_L2",
-        "cum_rms_v": "cum_rms_v_L2",
-    }
-    for old, new in alias_pairs.items():
-        if old in df.columns and new not in df.columns:
-            df[new] = df[old]
-
-    # common legacy column name
-    if "t" in df.columns and "Time" not in df.columns:
-        df = df.rename(columns={"t": "Time"})
-
-    return df
-
-
-def _available_metrics(df: pd.DataFrame) -> dict:
-    """Return availability of metric families for UI defaults."""
-    families = {
-        "Instantaneous": [
-            "error_u_L2",
-            "error_u_H1",
-            "error_v_L2",
-            "error_v_H1",
-        ],
-        "Cumulative": [
-            "cum_mean_u_L2",
-            "cum_rms_u_L2",
-            "cum_mean_u_H1",
-            "cum_rms_u_H1",
-            "cum_mean_v_L2",
-            "cum_rms_v_L2",
-        ],
-        "Delta": [
-            "delta_u_L2",
-            "delta_u_H1",
-            "delta_v_L2",
-            "delta_v_H1",
-        ],
-        "Rel delta": [
-            "rel_delta_u_L2",
-            "rel_delta_u_H1",
-            "rel_delta_v_L2",
-            "rel_delta_v_H1",
-        ],
-    }
-    out = {}
-    cols = set(df.columns)
-    for fam, keys in families.items():
-        out[fam] = any(k in cols for k in keys)
-    return out
-
-
-# helper: convert DataFrame (with index) to a Markdown table
-def df_with_index_to_markdown(df, index_name="metric", value_format=None):
-    cols = list(df.columns)
-    header = "| " + index_name + " | " + " | ".join(cols) + " |"
-    sep = "| --- " + " | ---" * len(cols) + " |"
-    lines = [header, sep]
-    for idx in df.index:
-        row_vals = []
-        for c in cols:
-            v = df.at[idx, c]
-            if pd.isna(v):
-                s = ""
-            else:
-                if value_format is not None:
-                    try:
-                        s = value_format(v)
-                    except Exception:
-                        s = str(v)
-                else:
-                    s = str(v)
-            row_vals.append(s)
-        lines.append("| " + str(idx) + " | " + " | ".join(row_vals) + " |")
-    return "\n".join(lines)
-
-
-# allow multiple files
-uploaded = st.file_uploader(
-    "Upload CSV(s)",
-    type=["csv"],
-    accept_multiple_files=True,
-    key="uploader_mms",
-)
-
-_ingest_uploads(uploaded, target="MMS")
-
-if not st.session_state["uploads_mms"]:
-    st.info("Upload one or more CSV files to get started.")
-    st.stop()
-
-# read cached uploads into dict: name -> DataFrame
-datasets = {}
-read_errors = []
-for cu in st.session_state["uploads_mms"].values():
-    try:
-        df = pd.read_csv(io.BytesIO(cu.data))
-        df = _drop_spacer_columns(df)
-        df = _ensure_canonical_schema(df)
-        df = _coerce_numeric_columns(df)
-        datasets[cu.name] = df
-    except Exception as e:
-        read_errors.append((cu.name, str(e)))
-
-if read_errors:
-    for name, err in read_errors:
-        st.error(f"Failed to read {name}: {err}")
-
-file_names = list(datasets.keys())
-
-if not file_names:
-    st.error("No valid CSV files uploaded.")
-    st.stop()
-
-# show previews in tabs
-tabs = st.tabs(file_names)
-for name, tab in zip(file_names, tabs):
-    df = datasets[name]
-    with tab:
-        st.subheader(f"Preview - {name}")
-        st.dataframe(df.head(20), width='stretch')
-        if st.checkbox(f"Show full dataframe: {name}"):
-            st.dataframe(df, width='stretch')
-
-        st.download_button(
-            "Download full Markdown",
-            data=df_with_index_to_markdown(df, index_name="column"),
-            file_name=f"{name}_full.md",
-            mime="text/markdown",
-        )
-
-# sidebar controls
-st.sidebar.header("Files & Plots")
-selected = st.sidebar.multiselect("Select files to plot (overlay)", options=file_names, default=file_names[:1])
-if not selected:
-    st.sidebar.warning("Select at least one file to plot.")
-    st.stop()
-
-# required x-axis
-for name in selected:
-    if "Time" not in datasets[name].columns and "step" not in datasets[name].columns:
-        st.error(f"File {name} must contain a `time` or `step` column.")
+    if not st.session_state["uploads_studies"]:
+        st.info("Upload one or more study CSV files to get started.")
         st.stop()
 
-# Decide x-axis (time preferred)
-x_axis = st.sidebar.selectbox("X axis", options=["Time", "step"], index=0)
-# If any selected file lacks time, fall back to step automatically.
-if x_axis == "Time" and any("Time" not in datasets[n].columns for n in selected):
-    x_axis = "step"
-    st.sidebar.info("Some files are missing `time`; using `step` on the x-axis.")
+    # Always build the selectable list from cached uploads, even if parsing fails.
+    study_datasets: dict[str, pd.DataFrame] = {}
+    study_kinds: dict[str, str] = {}
+    errors = []
+    all_cached_names: list[str] = []
+    for cu in st.session_state["uploads_studies"].values():
+        all_cached_names.append(cu.name)
+        try:
+            df = read_csv_robust(cu.data)
+            df = _drop_spacer_columns(df)
+            # normalize common columns
+            if "t" not in df.columns and "Time" in df.columns:
+                df = df.rename(columns={"Time": "t"})
+            df = _coerce_numeric_columns(df)
+            kind = _infer_study_schema(df)
+            study_datasets[cu.name] = df
+            study_kinds[cu.name] = kind
+        except Exception as e:
+            # Keep the file in the list, but mark it as Unknown with an error.
+            study_kinds[cu.name] = "Unknown"
+            errors.append((cu.name, str(e)))
 
-# sidebar plot toggles
-show_inst = st.sidebar.checkbox("Instantaneous errors (log scale)", value=True)
-show_delta = st.sidebar.checkbox("Step-to-step deltas", value=False)
-show_reldelta = st.sidebar.checkbox("Relative step-to-step deltas", value=False)
-show_table = st.sidebar.checkbox("Show comparison table", value=False)
-legend_mode = st.sidebar.selectbox("Legend placement", options=["Outside (compact)", "Inside (default)"], index=0)
+    if errors:
+        with st.sidebar.expander("Files with parsing issues", expanded=False):
+            for name, err in errors:
+                st.warning(f"{name}: {err}")
 
-# Theming & palettes (Light theme removed)
-palette_choice = st.sidebar.selectbox("Color palette", options=["Default", "High contrast", "Colorblind-friendly"], index=0)
+    # Provide a palette for study plots
+    palette_choice = st.sidebar.selectbox(
+        "Color palette", options=["Default", "High contrast", "Colorblind-friendly"], index=0, key="palette_studies"
+    )
+    palette = _default_palette(palette_choice)
 
-# palette definitions
-palettes = {
-    "Default": px.colors.qualitative.Plotly,
-    "High contrast": ["#000000", "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628"],
-    "Colorblind-friendly": px.colors.qualitative.Set1,
-}
-palette = palettes.get(palette_choice, px.colors.qualitative.Plotly)
+    # Guidance panel: use only successfully parsed datasets
+    _render_what_can_i_plot_panel(datasets=study_datasets, context="Studies mode")
 
-# session-state: aliases and presets
-if "aliases" not in st.session_state:
-    st.session_state.aliases = {name: name for name in file_names}
+    # sidebar selection
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Study files")
+    names = sorted(all_cached_names)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("File aliases")
-for name in file_names:
-    # create a stable widget key using filename
-    key = f"alias__{name}"
-    val = st.sidebar.text_input(f"Alias for {name}", value=st.session_state.aliases.get(name, name), key=key)
-    st.session_state.aliases[name] = val
+    _autoselect_new_files("studies_selected_files", names, newly_added)
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("Metric selection")
+    _ensure_multiselect_state(
+        "studies_selected_widget",
+        options=names,
+        desired_default=st.session_state.get("studies_selected_files") or names,
+    )
 
-# Detect which norms are available across selected files, so users can actually find H1.
-# We consider H1 available if any key H1 column exists in any selected dataset.
+    selected = st.sidebar.multiselect(
+        "Select files",
+        options=names,
+        default=st.session_state.get("studies_selected_files") or names[:1],
+        key="studies_selected_widget",
+    )
+    selected = [s for s in selected if s in names]
+    st.session_state["studies_selected_files"] = selected
 
-def _has_any_col(name: str, cols: set[str]) -> bool:
-    return name in cols
+    if not selected:
+        st.info("No study file selected. Pick one in the sidebar, or Move/Copy a CSV into Studies.")
+        st.stop()
 
+    # Only plot files we could parse; still show tabs for all selected.
+    tabs = st.tabs([f"{n} ({study_kinds.get(n, 'Unknown')})" for n in selected])
+    for n, tab in zip(selected, tabs):
+        with tab:
+            st.subheader(n)
+            st.caption(f"Detected kind: {study_kinds.get(n, 'Unknown')}")
+            if n in study_datasets:
+                st.dataframe(study_datasets[n].head(30), width="stretch")
+            else:
+                st.warning(
+                    "This CSV couldn't be parsed, so plots are unavailable. You can still Move/Copy it to another view.")
 
-def _norm_available_in_any_selected(norm: str) -> bool:
-    keys = [
-        f"error_u_{norm}",
-        f"error_v_{norm}",
-        f"cum_mean_u_{norm}",
-        f"cum_rms_u_{norm}",
-        f"delta_u_{norm}",
-        f"rel_delta_u_{norm}",
-    ]
+    st.markdown("---")
+
+    by_kind: dict[str, list[str]] = {"Dissipation": [], "Modal": [], "Unknown": []}
     for n in selected:
-        cols = set(datasets[n].columns)
-        if any(k in cols for k in keys):
-            return True
-    return False
+        by_kind.setdefault(study_kinds.get(n, "Unknown"), []).append(n)
+
+    if by_kind.get("Dissipation"):
+        st.subheader("Dissipation study")
+        st.caption("Plots from columns: `t`, `E`, and optionally `E_over_E0`.")
+
+        figE = go.Figure()
+        figR = go.Figure()
+        for i, n in enumerate(by_kind["Dissipation"]):
+            df = study_datasets[n]
+            cols = {c.lower(): c for c in df.columns}
+            tcol = cols.get("t")
+            ecol = cols.get("e")
+            rcol = cols.get("e_over_e0") or cols.get("e_over_e_0")
+            if tcol is None or ecol is None:
+                st.warning(f"{n}: missing required columns for dissipation plot (need t and E)")
+                continue
+
+            color = palette[i % len(palette)]
+            figE.add_trace(
+                go.Scatter(
+                    x=df[tcol], y=df[ecol], mode="lines+markers", name=f"{n}: E", line=dict(color=color)
+                )
+            )
+            if rcol is not None:
+                figR.add_trace(
+                    go.Scatter(
+                        x=df[tcol],
+                        y=df[rcol],
+                        mode="lines+markers",
+                        name=f"{n}: E/E0",
+                        line=dict(color=color),
+                    )
+                )
+
+        figE.update_xaxes(title_text="t")
+        figE.update_yaxes(title_text="Energy E")
+        figE.update_layout(height=420, margin=dict(l=40, r=20, t=40, b=40))
+        st.plotly_chart(figE, width="stretch")
+
+        if len(figR.data) > 0:
+            figR.update_xaxes(title_text="t")
+            figR.update_yaxes(title_text="E/E0")
+            figR.update_layout(height=420, margin=dict(l=40, r=20, t=40, b=40))
+            st.plotly_chart(figR, width="stretch")
+
+    if by_kind.get("Modal"):
+        st.subheader("Modal study")
+        st.caption("Plots from columns: `t`, `a`, `adot`.")
+
+        figA = go.Figure()
+        figAd = go.Figure()
+        for i, n in enumerate(by_kind["Modal"]):
+            df = study_datasets[n]
+            cols = {c.lower(): c for c in df.columns}
+            tcol = cols.get("t")
+            acol = cols.get("a")
+            adcol = cols.get("adot")
+            if tcol is None or acol is None or adcol is None:
+                st.warning(f"{n}: missing required columns for modal plot (need t,a,adot)")
+                continue
+            color = palette[i % len(palette)]
+            figA.add_trace(
+                go.Scatter(
+                    x=df[tcol], y=df[acol], mode="lines+markers", name=f"{n}: a", line=dict(color=color)
+                )
+            )
+            figAd.add_trace(
+                go.Scatter(
+                    x=df[tcol],
+                    y=df[adcol],
+                    mode="lines+markers",
+                    name=f"{n}: adot",
+                    line=dict(color=color),
+                )
+            )
+
+        figA.update_xaxes(title_text="t")
+        figA.update_yaxes(title_text="a(t)")
+        figA.update_layout(height=420, margin=dict(l=40, r=20, t=40, b=40))
+        st.plotly_chart(figA, width="stretch")
+
+        figAd.update_xaxes(title_text="t")
+        figAd.update_yaxes(title_text="adot(t)")
+        figAd.update_layout(height=420, margin=dict(l=40, r=20, t=40, b=40))
+        st.plotly_chart(figAd, width="stretch")
+
+    if by_kind.get("Unknown"):
+        st.subheader("Unrecognized study files")
+        for n in by_kind["Unknown"]:
+            if n not in study_datasets:
+                st.warning(
+                    f"{n}: could not be parsed, so no plots are available in Studies. You can still Move/Copy it to another view.")
+                continue
+            df = study_datasets[n]
+            st.warning(
+                f"{n}: could not detect study type from columns {list(df.columns)}. "
+                "Expected dissipation (`n,t,E,E_over,E0`) or modal (`n,t,a,adot`)."
+            )
 
 
-available_norms = [n for n in ("L2", "H1") if _norm_available_in_any_selected(n)]
-if not available_norms:
-    available_norms = ["L2", "H1"]
-
-metric_norm = st.sidebar.selectbox("Norm", options=available_norms, index=0)
-
-if "H1" not in available_norms:
-    st.sidebar.warning(
-        "No H1 columns detected in the selected file(s). "
-        "To see H1 plots, the CSV must contain columns like `error_u_H1`, `delta_u_H1`, `cum_mean_u_H1`, ..."
+# ------------------------
+# MMS mode
+# ------------------------
+def render_mms():
+    st.write(
+        "Upload one or more CSVs (with columns like `time`, `error_u_L2`, `error_u_H1`, etc.) and compare plots."
     )
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("Presets")
-preset_file = st.sidebar.file_uploader("Load preset (JSON)", type=["json"])
-if preset_file is not None:
-    try:
-        pdata = json.load(preset_file)
-        # only set values that exist in the preset
-        if "aliases" in pdata:
-            for k, v in pdata["aliases"].items():
-                if k in st.session_state.aliases:
-                    st.session_state.aliases[k] = v
-        if "selected" in pdata:
-            # update selected via session state trick
-            st.session_state["_preset_selected"] = pdata["selected"]
-        if "legend_mode" in pdata:
-            st.session_state["_preset_legend_mode"] = pdata["legend_mode"]
-        if "show_inst" in pdata:
-            st.session_state["_preset_show_inst"] = pdata["show_inst"]
-        if "show_delta" in pdata:
-            st.session_state["_preset_show_delta"] = pdata["show_delta"]
-        if "show_reldelta" in pdata:
-            st.session_state["_preset_show_reldelta"] = pdata.get("show_reldelta", show_reldelta)
-        if "metric_norm" in pdata:
-            st.session_state["_preset_metric_norm"] = pdata["metric_norm"]
-        if "x_axis" in pdata:
-            st.session_state["_preset_x_axis"] = pdata["x_axis"]
+    _render_move_copy_panel("MMS")
 
-        selected = st.session_state.get("_preset_selected", selected)
-        legend_mode = st.session_state.get("_preset_legend_mode", legend_mode)
-        show_inst = st.session_state.get("_preset_show_inst", show_inst)
-        show_delta = st.session_state.get("_preset_show_delta", show_delta)
-        show_reldelta = st.session_state.get("_preset_show_reldelta", show_reldelta)
-        metric_norm = st.session_state.get("_preset_metric_norm", metric_norm)
-        x_axis = st.session_state.get("_preset_x_axis", x_axis)
-
-        st.sidebar.success("Preset loaded successfully.")
-    except Exception as e:
-        st.sidebar.error(f"Failed to load preset: {e}")
-
-# expose save preset button
-if st.sidebar.button("Save current preset"):
-    preset = {
-        "aliases": st.session_state.aliases,
-        "selected": selected,
-        "legend_mode": legend_mode,
-        "show_inst": show_inst,
-        "show_delta": show_delta,
-        "show_reldelta": show_reldelta,
-        "metric_norm": metric_norm,
-        "x_axis": x_axis,
-    }
-    st.sidebar.download_button(
-        "Download preset.json",
-        data=json.dumps(preset, indent=2),
-        file_name="mms_preset.json",
-        mime="application/json",
+    uploaded = st.file_uploader(
+        "MMS / error history CSVs",
+        type=["csv"],
+        accept_multiple_files=True,
+        key="uploader_mms",
     )
 
+    # If uploader is empty, don't wipe caches: user might want to Move/Copy files into MMS.
+    if uploaded:
+        current_names = set([f.name for f in uploaded])
+        prev_names = set(st.session_state.get("_prev_mms_names", set()))
+        st.session_state["_prev_mms_names"] = current_names
+        newly_added = current_names - prev_names
 
-def _get_x(df: pd.DataFrame, x_axis: str):
-    if x_axis in df.columns:
-        return df[x_axis]
-    # fallback
-    if "Time" in df.columns:
-        return df["Time"]
-    return df.index
-
-
-def _col(metric: str, var: str, norm: str):
-    # metric: error / delta / rel_delta / cum_mean / cum_rms
-    return f"{metric}_{var}_{norm}"
-
-
-def _help_block(title: str, body_md: str):
-    """Reusable help expander used under each plot section."""
-    with st.expander(f"Help: {title}", expanded=False):
-        st.markdown(body_md)
-
-
-def _norm_cols_hint(norm: str) -> str:
-    return (
-        f"- Instantaneous: `error_u_{norm}`, `error_v_{norm}`\n"
-        f"- Step delta: `delta_u_{norm}`, `delta_v_{norm}`\n"
-        f"- Relative delta: `rel_delta_u_{norm}`, `rel_delta_v_{norm}`\n"
-        f"- Cumulative: `cum_mean_u_{norm}`, `cum_rms_u_{norm}`, `cum_mean_v_{norm}`, `cum_rms_v_{norm}`\n"
-    )
-
-
-# Sidebar: comparison table toggle
-if show_table:
-    _help_block(
-        "Comparison table",
-        """
-**What this is**  
-A numeric summary of the instantaneous error series for the *selected norm* (L2/H1). It's useful for quickly comparing runs without visually inspecting every plot.
-
-**What it computes (per file and variable)**  
-- min / max / mean / median / stddev  
-- RMS (root-mean-square)  
-- final value (last sample)  
-- `x_of_max` / `x_of_min` (time or step where the extreme happens)  
-- `max_rel_step_change` = max over steps of `|e_n − e_{n-1}| / |e_{n-1}|` (ignores divisions by 0)
-
-**Columns used**  
-It pulls from:  
-- `error_u_<NORM>` and/or `error_v_<NORM>`
-
-**Tips / troubleshooting**  
-- If the table is empty, your CSV likely doesn't contain the chosen norm (e.g. missing `error_u_H1`). Switch **Norm** in the sidebar or check the CSV header.  
-- If you don't have a `time` column, choose **X axis = step** (we'll still compute `x_of_*`).
-""",
-    )
-
-    # build stats table for selected files
-    stats_names = [
-        "min",
-        "max",
-        "mean",
-        "median",
-        "stddev",
-        "rms",
-        "final",
-        "x_of_max",
-        "x_of_min",
-        "max_rel_step_change",
-    ]
-
-    def compute_stats(x, series):
-        if series is None or series.dropna().empty:
-            return {k: np.nan for k in stats_names}
-        s = series.dropna().astype(float)
-        out = {}
-        out["min"] = s.min()
-        out["max"] = s.max()
-        out["mean"] = s.mean()
-        out["median"] = s.median()
-        out["stddev"] = s.std()
-        out["rms"] = np.sqrt(np.mean(s.values ** 2))
-        out["final"] = s.iloc[-1]
-        # x of extrema (time/step)
-        try:
-            idx_max = s.idxmax()
-            out["x_of_max"] = float(x.loc[idx_max]) if x is not None else np.nan
-        except Exception:
-            out["x_of_max"] = np.nan
-        try:
-            idx_min = s.idxmin()
-            out["x_of_min"] = float(x.loc[idx_min]) if x is not None else np.nan
-        except Exception:
-            out["x_of_min"] = np.nan
-        # max relative step change
-        prev = s.shift(1)
-        denom = prev.abs()
-        with np.errstate(divide="ignore", invalid="ignore"):
-            rel = (s - prev).abs() / denom
-        rel = rel.replace([np.inf, -np.inf], np.nan).dropna()
-        out["max_rel_step_change"] = rel.max() if not rel.empty else np.nan
-        return out
-
-    cols = {}
-    for name in selected:
-        df = datasets[name]
-        alias = st.session_state.aliases.get(name, name)
-        x = _get_x(df, x_axis)
-
-        # u and v, chosen norm
-        for var in ("u", "v"):
-            c = _col("error", var, metric_norm)
-            if c in df.columns:
-                stats = compute_stats(x, df[c])
-                cols[f"{alias}: {var} ({metric_norm})"] = [stats.get(k, np.nan) for k in stats_names]
-
-    if not cols:
-        st.warning("No matching error columns found for the selected norm.")
+        # NOTE: don't prune cached uploads based on the current uploader widget state.
+        # Streamlit resets the uploader when switching modes/tabs; pruning here would orphan cached files.
+        _ingest_uploads(uploaded, target="MMS")
     else:
-        stats_df = pd.DataFrame(cols, index=stats_names)
-        stats_display = stats_df.copy()
-        for c in stats_display.columns:
-            stats_display[c] = stats_display[c].map(lambda x: "{:.5e}".format(x) if pd.notna(x) else "")
+        newly_added = set()
+        if not st.session_state.get("uploads_mms"):
+            st.info("Upload one or more CSV files to get started, or Move/Copy existing uploads into MMS.")
+            st.stop()
 
-        st.subheader("Comparison table: summary statistics")
-        st.caption(f"Based on `{x_axis}` and `{metric_norm}` instantaneous errors.")
-        st.dataframe(stats_display.style.set_table_attributes('style="font-family: monospace;"'))
+    if not st.session_state["uploads_mms"]:
+        st.info("Upload one or more CSV files to get started.")
+        st.stop()
 
-        md_full = df_with_index_to_markdown(
-            stats_df,
-            index_name="stat",
-            value_format=lambda x: "{:.5e}".format(x) if pd.notna(x) else "",
+    datasets = {}
+    read_errors = []
+    all_cached_names: list[str] = []
+    for cu in st.session_state["uploads_mms"].values():
+        all_cached_names.append(cu.name)
+        try:
+            df = read_csv_robust(cu.data)
+            df = _drop_spacer_columns(df)
+            df = _ensure_canonical_schema(df)
+            df = _coerce_numeric_columns(df)
+            datasets[cu.name] = df
+        except Exception as e:
+            # Keep the file visible/selectable even if it can't be parsed.
+            read_errors.append((cu.name, str(e)))
+
+    _render_what_can_i_plot_panel(datasets=datasets, context="MMS mode")
+
+    if read_errors:
+        with st.sidebar.expander("Files with parsing issues", expanded=False):
+            for name, err in read_errors:
+                st.warning(f"{name}: {err}")
+
+    # IMPORTANT: build the list from cached uploads, not only from successfully parsed datasets.
+    # Otherwise schema-mismatched files disappear from the list and can't be removed/moved.
+    file_names = sorted({*all_cached_names})
+
+    # Auto-select new files and prune removed from selection.
+    _autoselect_new_files("mms_selected_files", file_names, newly_added)
+
+    # Ensure widget state is valid for current options (fixes stale selection when last file is removed)
+    _ensure_multiselect_state(
+        "mms_selected_widget",
+        options=file_names,
+        desired_default=st.session_state.get("mms_selected_files") or file_names,
+    )
+
+    # sidebar controls
+    st.sidebar.header("Files & Plots")
+    selected = st.sidebar.multiselect(
+        "Select files to plot (overlay)",
+        options=file_names,
+        default=st.session_state.get("mms_selected_files") or file_names[:1],
+        key="mms_selected_widget",
+    )
+    selected = [s for s in selected if s in file_names]
+    st.session_state["mms_selected_files"] = selected
+
+    if not selected:
+        st.sidebar.warning("Select at least one file to plot.")
+        st.stop()
+
+    # required x-axis (only enforce for files that successfully parsed)
+    bad_for_plot = []
+    for name in selected:
+        if name not in datasets:
+            bad_for_plot.append(name)
+            continue
+        if "Time" not in datasets[name].columns and "step" not in datasets[name].columns:
+            bad_for_plot.append(name)
+
+    if bad_for_plot:
+        st.error(
+            "Some selected files aren't plottable in MMS (missing `time`/`step` or failed parsing): "
+            + ", ".join(bad_for_plot)
+            + ".\n\nTip: move them to Studies/Convergence using the Move/Copy panel, or deselect them here."
         )
-        st.download_button(
-            "Download comparison Markdown (full)",
-            data=md_full,
-            file_name="comparison_stats_full.md",
-            mime="text/markdown",
+        st.stop()
+
+    # Decide x-axis (time preferred)
+    x_axis = st.sidebar.selectbox("X axis", options=["Time", "step"], index=0)
+    # If any selected file lacks time, fall back to step automatically.
+    if x_axis == "Time" and any("Time" not in datasets[n].columns for n in selected):
+        x_axis = "step"
+        st.sidebar.info("Some files are missing `time`; using `step` on the x-axis.")
+
+    # sidebar plot toggles
+    show_inst = st.sidebar.checkbox("Instantaneous errors (log scale)", value=True)
+    show_delta = st.sidebar.checkbox("Step-to-step deltas", value=False)
+    show_reldelta = st.sidebar.checkbox("Relative step-to-step deltas", value=False)
+    show_table = st.sidebar.checkbox("Show comparison table", value=False)
+    legend_mode = st.sidebar.selectbox("Legend placement", options=["Outside (compact)", "Inside (default)"], index=0)
+
+    # Theming & palettes (Light theme removed)
+    palette_choice = st.sidebar.selectbox(
+        "Color palette", options=["Default", "High contrast", "Colorblind-friendly"], index=0
+    )
+
+    palettes = {
+        "Default": px.colors.qualitative.Plotly,
+        "High contrast": ["#000000", "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628"],
+        "Colorblind-friendly": px.colors.qualitative.Set1,
+    }
+    palette = palettes.get(palette_choice, px.colors.qualitative.Plotly)
+
+    if "aliases" not in st.session_state:
+        st.session_state.aliases = {name: name for name in file_names}
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("File aliases")
+    for name in file_names:
+        key = f"alias__{name}"
+        val = st.sidebar.text_input(f"Alias for {name}", value=st.session_state.aliases.get(name, name), key=key)
+        st.session_state.aliases[name] = val
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Metric selection")
+
+    def _norm_available_in_any_selected(norm: str) -> bool:
+        keys = [
+            f"error_u_{norm}",
+            f"error_v_{norm}",
+            f"cum_mean_u_{norm}",
+            f"cum_rms_u_{norm}",
+            f"delta_u_{norm}",
+            f"rel_delta_u_{norm}",
+        ]
+        for n in selected:
+            cols = set(datasets[n].columns)
+            if any(k in cols for k in keys):
+                return True
+        return False
+
+    available_norms = [n for n in ("L2", "H1") if _norm_available_in_any_selected(n)]
+    if not available_norms:
+        available_norms = ["L2", "H1"]
+
+    metric_norm = st.sidebar.selectbox("Norm", options=available_norms, index=0)
+
+    if "H1" not in available_norms:
+        st.sidebar.warning(
+            "No H1 columns detected in the selected file(s). "
+            "To see H1 plots, the CSV must contain columns like `error_u_H1`, `delta_u_H1`, `cum_mean_u_H1`, ..."
         )
 
+    # ------------------------
+    # Plotting helpers
+    # ------------------------
+    def _get_x(df: pd.DataFrame):
+        if x_axis in df.columns:
+            return df[x_axis]
+        if "Time" in df.columns:
+            return df["Time"]
+        if "step" in df.columns:
+            return df["step"]
+        return df.index
 
-def fig_to_png_bytes(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
-    buf.seek(0)
-    return buf
+    def _col(metric: str, var: str, norm: str):
+        return f"{metric}_{var}_{norm}"
 
+    # ------------------------
+    # MMS plots
+    # ------------------------
+    if show_inst:
+        st.subheader("Instantaneous MMS error (interactive)")
+        fig = go.Figure()
 
-def fig_to_pdf_bytes(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format="pdf", bbox_inches="tight")
-    buf.seek(0)
-    return buf
+        any_trace = False
+        for i, name in enumerate(selected):
+            df = datasets[name]
+            x = _get_x(df)
+            alias = st.session_state.aliases.get(name, name)
+            color = palette[i % len(palette)]
 
-
-col1, col2 = st.columns(2)
-
-# helper: style cycle (plotly will assign colors automatically)
-markers = ["circle", "square", "diamond", "triangle-up", "triangle-down", "x", "cross", "star"]
-lines = ["solid", "dash", "dot", "dashdot"]
-
-
-# helper for safe image export (handles Kaleido/Chrome missing)
-def safe_image_bytes(fig, fmt="png", scale=2):
-    try:
-        img = fig.to_image(format=fmt, scale=scale)
-        return img, None
-    except Exception as e:
-        return None, str(e)
-
-
-# ---------- FIG 1: instantaneous errors (interactive) ----------
-if show_inst:
-    st.subheader("Instantaneous MMS error - comparison (interactive)")
-    _help_block(
-        "Instantaneous MMS error",
-        f"""
-**What this plot is**  
-The per-time-step error of your numerical solution against the manufactured solution.
-
-**Columns used (chosen Norm = `{metric_norm}`)**  
-- `error_u_{metric_norm}` for displacement/solution `u`  
-- `error_v_{metric_norm}` for velocity `v` (if present)
-
-**Axis meaning**  
-- X axis: `{x_axis}` (choose in sidebar; `time` is preferred, `step` works too)  
-- Y axis: error magnitude in **log scale** (so you can see decades of change)
-
-**How to read it**  
-- A downward trend typically means the method is stable/accurate for the configuration.  
-- Oscillations can be physical (wave-like) or numerical (time integration artifacts).  
-- Sudden spikes can indicate CFL/time-step issues, solver divergence, or boundary/forcing discontinuities.
-
-**Common gotchas**  
-- If you don't see H1: your CSV must contain `error_u_H1`/`error_v_H1`. The sidebar will hide `H1` if it isn't detected.
-- If only `u` appears: the file likely doesn't contain the corresponding `v` column.
-""",
-    )
-
-    fig = go.Figure()
-
-    any_u = False
-    any_v = False
-    for i, name in enumerate(selected):
-        df = datasets[name]
-        x = _get_x(df, x_axis)
-        alias = st.session_state.aliases.get(name, name)
-        marker_sym = markers[i % len(markers)]
-        dash = lines[i % len(lines)]
-        color = palette[i % len(palette)]
-        marker_outline = "#ffffff"
-
-        cu = _col("error", "u", metric_norm)
-        cv = _col("error", "v", metric_norm)
-        if cu in df.columns:
-            any_u = True
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=df[cu],
-                    mode="lines+markers",
-                    name=f"{alias}: u ({metric_norm})",
-                    marker=dict(symbol=marker_sym, color=color, line=dict(color=marker_outline, width=1)),
-                    line=dict(color=color, dash=dash, width=2),
-                )
-            )
-        if cv in df.columns:
-            any_v = True
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=df[cv],
-                    mode="lines+markers",
-                    name=f"{alias}: v ({metric_norm})",
-                    marker=dict(symbol=marker_sym, color=color, line=dict(color=marker_outline, width=1)),
-                    line=dict(color=color, dash=dash, width=2),
-                )
-            )
-
-    if not any_u and not any_v:
-        st.warning(f"None of the selected files contain instantaneous `{metric_norm}` error columns.")
-
-    fig.update_xaxes(title_text=x_axis)
-    fig.update_yaxes(title_text=f"{metric_norm} error", type="log")
-    fig.update_yaxes(showgrid=True)
-    st.plotly_chart(fig, width='stretch')
-
-    st.download_button(
-        "Download instantaneous series JSON",
-        data=fig.to_json(),
-        file_name="instantaneous_plot.json",
-        mime="application/json",
-    )
-
-
-# ---------- FIG 3: deltas (interactive) ----------
-if show_delta:
-    st.subheader("Step-to-step variation - comparison (interactive)")
-    _help_block(
-        "Step-to-step deltas",
-        f"""
-**What this plot is**  
-The absolute change of the error from one sample to the next. It helps you spot bursts/instabilities.
-
-Typically:
-$$
-\\Delta e_n = e_n - e_{{n-1}}
-$$
-
-(Some codes store an absolute value; this viewer simply plots what's in the CSV.)
-
-**Columns used (chosen Norm = `{metric_norm}`)**  
-- `delta_u_{metric_norm}`, `delta_v_{metric_norm}`
-
-**How to read it**  
-- Values near 0 mean the error is evolving smoothly.  
-- Large magnitude excursions mean a sudden change in error (often aligned with sharp forcing, reflections, or a too-large dt).
-
-**Troubleshooting**  
-- If you don't see lines, that usually means the column isn't present (e.g. your CSV has only `delta_*_L2`). Switch Norm or regenerate the CSV.
-""",
-    )
-
-    fig = go.Figure()
-
-    any_delta = False
-    for i, name in enumerate(selected):
-        df = datasets[name]
-        x = _get_x(df, x_axis)
-        alias = st.session_state.aliases.get(name, name)
-        dash = lines[i % len(lines)]
-        color = palette[i % len(palette)]
-
-        for var in ("u", "v"):
-            c = _col("delta", var, metric_norm)
-            if c in df.columns:
+            for var, label in (("u", "u"), ("v", "v")):
+                c = _col("error", var, metric_norm)
+                if c not in df.columns:
+                    continue
                 fig.add_trace(
                     go.Scatter(
                         x=x,
                         y=df[c],
-                        mode="lines",
-                        name=f"{alias}: Δ{var} ({metric_norm})",
-                        line=dict(color=color, dash=dash, width=2),
+                        mode="lines+markers",
+                        name=f"{alias}: {label} ({metric_norm})",
+                        line=dict(color=color, width=2),
                     )
                 )
-                any_delta = True
+                any_trace = True
 
-    if not any_delta:
-        st.warning("None of the selected files contain delta columns for the chosen norm.")
+        if not any_trace:
+            st.warning(
+                f"No instantaneous error columns found for norm={metric_norm} (expected error_u_{metric_norm}/error_v_{metric_norm}).")
+        else:
+            fig.update_xaxes(title_text=x_axis)
+            fig.update_yaxes(title_text=f"{metric_norm} error", type="log")
+            fig.update_layout(height=520, margin=dict(l=40, r=20, t=40, b=40), legend=dict(orientation="h"))
+            st.plotly_chart(fig, width="stretch")
 
-    fig.update_xaxes(title_text=x_axis)
-    fig.update_yaxes(title_text="Increment")
-    fig.update_yaxes(showgrid=True)
-    st.plotly_chart(fig, width='stretch')
+    if show_delta:
+        st.subheader("Step-to-step deltas (interactive)")
+        fig = go.Figure()
+        any_trace = False
 
-    st.download_button(
-        "Download deltas series JSON",
-        data=fig.to_json(),
-        file_name="deltas_plot.json",
-        mime="application/json",
-    )
+        for i, name in enumerate(selected):
+            df = datasets[name]
+            x = _get_x(df)
+            alias = st.session_state.aliases.get(name, name)
+            color = palette[i % len(palette)]
 
-
-# ---------- FIG 4: relative deltas (interactive) ----------
-if show_reldelta:
-    st.subheader("Relative step-to-step variation - comparison (interactive)")
-    _help_block(
-        "Relative step-to-step deltas",
-        f"""
-**What this plot is**  
-The step-to-step change scaled by the previous value, typically:
-$$
-r_n = \\frac{{|e_n - e_{{n-1}}|}}{{|e_{{n-1}}|}}
-$$
-
-This is a dimensionless "percent-like" change indicator.
-
-**Columns used (chosen Norm = `{metric_norm}`)**  
-- `rel_delta_u_{metric_norm}`, `rel_delta_v_{metric_norm}`
-
-**How to read it**  
-- Near 0: stable evolution.  
-- Large spikes: abrupt transitions or times where the denominator is small.
-
-**Important gotcha**  
-- If the previous error is ~0, the relative delta can blow up or become undefined. Your CSV generator may clamp/skip; the viewer will just plot what's provided.
-""",
-    )
-
-    fig = go.Figure()
-
-    any_delta = False
-    for i, name in enumerate(selected):
-        df = datasets[name]
-        x = _get_x(df, x_axis)
-        alias = st.session_state.aliases.get(name, name)
-        dash = lines[i % len(lines)]
-        color = palette[i % len(palette)]
-
-        for var in ("u", "v"):
-            c = _col("rel_delta", var, metric_norm)
-            if c in df.columns:
+            for var, label in (("u", "u"), ("v", "v")):
+                c = _col("delta", var, metric_norm)
+                if c not in df.columns:
+                    continue
                 fig.add_trace(
                     go.Scatter(
                         x=x,
                         y=df[c],
-                        mode="lines",
-                        name=f"{alias}: relΔ{var} ({metric_norm})",
-                        line=dict(color=color, dash=dash, width=2),
+                        mode="lines+markers",
+                        name=f"{alias}: Δ{label} ({metric_norm})",
+                        line=dict(color=color, width=2),
                     )
                 )
-                any_delta = True
+                any_trace = True
 
-    if not any_delta:
-        st.warning("None of the selected files contain relative-delta columns for the chosen norm.")
+        if not any_trace:
+            st.warning(
+                f"No delta columns found for norm={metric_norm} (expected delta_u_{metric_norm}/delta_v_{metric_norm}).")
+        else:
+            fig.update_xaxes(title_text=x_axis)
+            fig.update_yaxes(title_text="Δ error")
+            fig.update_layout(height=520, margin=dict(l=40, r=20, t=40, b=40), legend=dict(orientation="h"))
+            st.plotly_chart(fig, width="stretch")
 
-    fig.update_xaxes(title_text=x_axis)
-    fig.update_yaxes(title_text="Relative increment")
-    fig.update_yaxes(showgrid=True)
-    st.plotly_chart(fig, width='stretch')
+    if show_reldelta:
+        st.subheader("Relative step-to-step deltas (interactive)")
+        fig = go.Figure()
+        any_trace = False
 
-    st.download_button(
-        "Download relative deltas series JSON",
-        data=fig.to_json(),
-        file_name="rel_deltas_plot.json",
-        mime="application/json",
-    )
+        for i, name in enumerate(selected):
+            df = datasets[name]
+            x = _get_x(df)
+            alias = st.session_state.aliases.get(name, name)
+            color = palette[i % len(palette)]
+
+            for var, label in (("u", "u"), ("v", "v")):
+                c = _col("rel_delta", var, metric_norm)
+                if c not in df.columns:
+                    continue
+                fig.add_trace(
+                    go.Scatter(
+                        x=x,
+                        y=df[c],
+                        mode="lines+markers",
+                        name=f"{alias}: relΔ{label} ({metric_norm})",
+                        line=dict(color=color, width=2),
+                    )
+                )
+                any_trace = True
+
+        if not any_trace:
+            st.warning(
+                f"No relative-delta columns found for norm={metric_norm} (expected rel_delta_u_{metric_norm}/rel_delta_v_{metric_norm})."
+            )
+        else:
+            fig.update_xaxes(title_text=x_axis)
+            fig.update_yaxes(title_text="relative Δ error")
+            fig.update_layout(height=520, margin=dict(l=40, r=20, t=40, b=40), legend=dict(orientation="h"))
+            st.plotly_chart(fig, width="stretch")
+
+    # Note: show_table was present in the previous iteration; for now, keep it as a placeholder.
+    if show_table:
+        st.info(
+            "Comparison table refactor: not yet reintroduced. If you want it back, I'll add the summary table + preset save/load next.")
+
+
+# ------------------------
+# Main router
+# ------------------------
+
+def _render_global_sidebar():
+    with st.sidebar.expander("Uploads (persisted)", expanded=False):
+        st.caption("Uploads are cached in-session so switching mode won't clear them.")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            if st.button("Clear MMS uploads"):
+                st.session_state["uploads_mms"] = {}
+                st.session_state["mms_selected_files"] = None
+                st.rerun()
+        with col_b:
+            if st.button("Clear Conv uploads"):
+                st.session_state["uploads_conv"] = {}
+                st.rerun()
+        with col_c:
+            if st.button("Clear Studies uploads"):
+                st.session_state["uploads_studies"] = {}
+                st.session_state["studies_selected_files"] = None
+                st.rerun()
+
+        st.write(f"MMS cached: {len(st.session_state.get('uploads_mms', {}))}")
+        st.write(f"Conv cached: {len(st.session_state.get('uploads_conv', {}))}")
+        st.write(f"Studies cached: {len(st.session_state.get('uploads_studies', {}))}")
+
+
+# init persistence
+_ensure_upload_cache()
+
+st.sidebar.header("Mode")
+mode = st.sidebar.radio(
+    "Viewer",
+    options=["MMS", "Convergence", "Studies"],
+    index=0,
+    help="Switch between MMS time-series error viewer, convergence study viewer, and solver study CSV viewers.",
+)
+
+_render_global_sidebar()
+
+if mode == "MMS":
+    render_mms()
+elif mode == "Convergence":
+    render_convergence()
+else:
+    render_studies()
+
+st.stop()
