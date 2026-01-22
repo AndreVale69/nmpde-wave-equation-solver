@@ -445,7 +445,7 @@ def _render_what_can_i_plot_panel(*, datasets: dict[str, pd.DataFrame], context:
             # MMS detection: require at least one MMS-specific metric family; time/step alone is too generic.
             mms_avail = _available_metrics(df)
             mms_fams = [k for k, v in mms_avail.items() if v]
-            has_time = ("Time" in low) or ("t" in low) or ("time" in low)
+            has_time = ("t" in low) or ("time" in low)
             has_step = "step" in low
 
             if mms_fams:
@@ -840,7 +840,7 @@ def render_studies():
             df = study_datasets[n]
             st.warning(
                 f"{n}: could not detect study type from columns {list(df.columns)}. "
-                "Expected dissipation (`n,t,E,E_over,E0`) or modal (`n,t,a,adot`)."
+                "Expected dissipation (`n,t,E,E_over_E0`) or modal (`n,t,a,adot`)."
             )
 
 
