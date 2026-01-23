@@ -16,12 +16,57 @@
 #include <deal.II/base/utilities.h>
 #include <deal.II/fe/mapping_fe.h>
 #include <deal.II/numerics/vector_tools.h>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <numeric>
 #include <regex>
 #include <sstream>
 #include <string>
+
+namespace {
+    std::string make_filesystem_safe_timestamp() {
+        // deal.II provides separate date/time strings; we build YYYYMMDD-HHMMSS.
+        const std::string date = Utilities::System::get_date(); // e.g. "2026/01/23"
+        const std::string time = Utilities::System::get_time(); // e.g. "12:34:56"
+
+        // Keep only digits, then compose YYYYMMDD-HHMMSS.
+        auto digits_only = [](const std::string &s) {
+            std::string out;
+            out.reserve(s.size());
+            for (const char c: s)
+                if (c >= '0' && c <= '9')
+                    out.push_back(c);
+            return out;
+        };
+
+        const std::string d = digits_only(date);
+        const std::string t = digits_only(time);
+
+        if (d.size() >= 8 && t.size() >= 6)
+            return d.substr(0, 8) + "-" + t.substr(0, 6);
+
+        // Fallback: still provide something filename-safe.
+        return digits_only(date + time);
+    }
+
+    std::filesystem::path prefix_basename_with_timestamp(const std::filesystem::path &p,
+                                                         const std::string           &ts) {
+        if (p.empty())
+            return p;
+
+        const auto name = p.filename();
+        if (name.empty())
+            return p; // e.g. "dir/" - nothing to prefix
+
+        // Avoid double-prefixing if already present.
+        const std::string name_str = name.string();
+        if (!ts.empty() && name_str.rfind(ts + "_", 0) == 0)
+            return p;
+
+        return p.parent_path() / (ts + "_" + name_str);
+    }
+} // namespace
 
 class SineMode2D : public Function<2> {
 public:
@@ -392,6 +437,13 @@ void Wave::do_solve() {
         pcout << "-----------------------------------------------" << std::endl;
     }
 
+    // One timestamp per run, shared across ranks (used to prefix any CSV outputs written by rank
+    // 0).
+    std::string run_ts;
+    if (mpi_rank == 0)
+        run_ts = make_filesystem_safe_timestamp();
+    Utilities::MPI::broadcast(MPI_COMM_WORLD, run_ts, 0);
+
     // -------------------- Dissipation study (optional) --------------------
     double        E0 = 1.0;
     std::ofstream dissipation_out;
@@ -400,7 +452,9 @@ void Wave::do_solve() {
         E0 = compute_energy(solution_owned, velocity_owned);
 
         if (mpi_rank == 0) {
-            dissipation_out.open(parameters->study.dissipation_csv);
+            const auto outpath = prefix_basename_with_timestamp(
+                    std::filesystem::path(parameters->study.dissipation_csv), run_ts);
+            dissipation_out.open(outpath);
             dissipation_out << "n,t,E,E_over_E0\n";
 
             // Guard against E0=0 (e.g. zero initial conditions) to avoid NaNs in output.
@@ -443,7 +497,9 @@ void Wave::do_solve() {
         phi_M_phi = phi_owned * Mphi_owned;
 
         if (mpi_rank == 0) {
-            modal_out.open(parameters->study.modal_csv);
+            const auto outpath = prefix_basename_with_timestamp(
+                    std::filesystem::path(parameters->study.modal_csv), run_ts);
+            modal_out.open(outpath);
             modal_out << "n,t,a,adot\n";
         }
 
@@ -906,7 +962,9 @@ void Wave::print_error_summary() const {
     // Save the extended error history to CSV if requested in parameters (only rank 0 writes)
     if (parameters->output.compute_error) {
         if (mpi_rank == 0) {
-            const std::filesystem::path outpath(parameters->output.error_history_file);
+            const std::string           run_ts  = make_filesystem_safe_timestamp();
+            const std::filesystem::path outpath = prefix_basename_with_timestamp(
+                    std::filesystem::path(parameters->output.error_history_file), run_ts);
             try {
                 if (outpath.has_parent_path()) {
                     std::filesystem::create_directories(outpath.parent_path());
@@ -1008,11 +1066,11 @@ std::vector<Wave::TimeConvRow> Wave::run_time_convergence(const std::string     
     rows.reserve(dts.size());
 
     for (const double dt: dts) {
-        auto prm                      = std::make_shared<Parameters<dim>>(prm_base);
-        prm->time.dt                  = dt;
-        prm->output.output_every      = 999999; // disable output during convergence tests
-        prm->output.compute_error     = true; // enable error computation
-        prm->study.convergence_study  = false; // disable nested convergence recursion
+        auto prm                     = std::make_shared<Parameters<dim>>(prm_base);
+        prm->time.dt                 = dt;
+        prm->output.output_every     = 999999; // disable output during convergence tests
+        prm->output.compute_error    = true; // enable error computation
+        prm->study.convergence_study = false; // disable nested convergence recursion
 
         Wave w(prm);
         w.setup();
@@ -1039,8 +1097,11 @@ void Wave::write_time_convergence_csv(const std::string              &filename,
     if (mpi_rank != 0)
         return;
 
-    std::ofstream csv(filename);
-    AssertThrow(csv, ExcMessage("Could not open CSV file: " + filename));
+    const std::string run_ts = make_filesystem_safe_timestamp();
+    const auto outpath = prefix_basename_with_timestamp(std::filesystem::path(filename), run_ts);
+
+    std::ofstream csv(outpath);
+    AssertThrow(csv, ExcMessage("Could not open CSV file: " + outpath.string()));
 
     // Header
     csv << "dt,u_L2,u_H1,v_L2,q_uL2,q_uH1,q_vL2\n";
@@ -1233,8 +1294,11 @@ void Wave::write_space_convergence_csv(const std::string               &filename
     if (mpi_rank != 0)
         return;
 
-    std::ofstream csv(filename);
-    AssertThrow(csv, ExcMessage("Could not open CSV file: " + filename));
+    const std::string run_ts = make_filesystem_safe_timestamp();
+    const auto outpath = prefix_basename_with_timestamp(std::filesystem::path(filename), run_ts);
+
+    std::ofstream csv(outpath);
+    AssertThrow(csv, ExcMessage("Could not open CSV file: " + outpath.string()));
 
     // Header
     csv << "h,u_L2,u_H1,v_L2,p_uL2,p_uH1,p_vL2,mesh\n";
