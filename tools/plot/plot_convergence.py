@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 try:
-    from tools.plot.convergence_utils import (
+    from tools.plot.utils.convergence_utils import (
         ConvergenceKind,
         compute_observed_orders,
         detect_kind,
@@ -27,7 +27,7 @@ try:
         summarize_fits,
     )
 except Exception:  # pragma: no cover
-    from convergence_utils import (
+    from utils.convergence_utils import (
         ConvergenceKind,
         compute_observed_orders,
         detect_kind,

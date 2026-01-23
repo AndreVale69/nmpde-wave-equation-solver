@@ -5,7 +5,7 @@ Run:
   python3 tools/prm_gui.py
 
 Features:
-- Edit sections: Problem, Boundary condition, Mesh, Time, Output
+- Edit sections: Problem, Boundary condition, Mesh, Time, Output, Study
 - Load sensible defaults
 - Load a `.prm` file (simple parser)
 - Save `.prm` file in the project's expected `set key = value` format
@@ -99,11 +99,21 @@ DEFAULTS = {
         "every": "1",
         "enable_progress_bar": True,
         "compute_error": False,
+        "error_file": "build/error_history.csv",
+        "vtk_directory": "build",
+    },
+    "Study": {
+        "enable_dissipation": False,
+        "dissipation_every": "1",
+        "dissipation_csv": "dissipation.csv",
+        "enable_modal": False,
+        "modal_every": "1",
+        "modal_csv": "modal.csv",
+        "modal_k": "1",
+        "modal_l": "1",
         "convergence_study": False,
         "convergence_type": "Time",
         "convergence_csv": "",
-        "error_file": "build/error_history.csv",
-        "vtk_directory": "build",
     },
 }
 
@@ -113,7 +123,7 @@ CHOICES = {
     ("Problem", "type"): ["MMS", "Expr"],
     ("Boundary condition", "type"): ["Zero", "MMS", "Expr"],
     ("Time", "scheme"): ["Theta", "CentralDifference", "Newmark"],
-    ("Output", "convergence_type"): ["Time", "Space"],
+    ("Study", "convergence_type"): ["Time", "Space"],
 }
 
 HELP = {
@@ -147,19 +157,31 @@ HELP = {
     # Output
     ("Output", "every"): "Write VTK output every N time steps (integer). Set to 1 to write every step.",
     ("Output", "compute_error"): "When true (and problem type is MMS) the code computes and saves the error history to CSV.",
-    ("Output", "convergence_study"): "Enable convergence study (ONLY for MMS). If enabled, you must choose a convergence type (time/space).",
-    ("Output", "convergence_type"): "Convergence study type: 'Time' runs dt-refinement studies; 'Space' runs mesh-refinement studies. Used only if convergence_study is enabled.",
-    ("Output", "convergence_csv"): "Optional path to a CSV file where the convergence table will be saved. Enabled only when convergence_study is true (and Problem.type is MMS). Leave empty to disable CSV output.",
     ("Output", "error_file"): "Path to the CSV file where the error history will be saved. Enabled only if compute_error is true.",
     ("Output", "vtk_directory"): "Directory where VTK (.vtu/.pvtu) output files will be written. Use the picker to choose an output folder.",
     ("Output", "enable_progress_bar"): "Whether to enable the progress bar during time-stepping. It will be shown only on the master MPI process. Set to false to disable it. If the output is not a TTY (e.g., redirected to a file), the progress bar will be disabled automatically.",
+
+    # Study
+    ("Study", "enable_dissipation"): "Enable dissipation study. When enabled, the code writes energy diagnostics E and E/E0 to CSV during time stepping.",
+    ("Study", "dissipation_every"): "Write dissipation study output every N time steps (integer).",
+    ("Study", "dissipation_csv"): "CSV filename for dissipation study output.",
+    ("Study", "enable_modal"): "Enable modal study. When enabled, the code tracks a specific sine mode (k,l) and writes its amplitude to CSV during time stepping.",
+    ("Study", "modal_every"): "Write modal study output every N time steps (integer).",
+    ("Study", "modal_csv"): "CSV filename for modal study output.",
+    ("Study", "modal_k"): "Mode index k (positive integer) for sin(k*pi*x).",
+    ("Study", "modal_l"): "Mode index l (positive integer) for sin(l*pi*y).",
+    ("Study", "convergence_study"): "Enable convergence study (ONLY for MMS). If enabled, you must choose a convergence type (time/space).",
+    ("Study", "convergence_type"): "Convergence study type: 'Time' runs dt-refinement studies; 'Space' runs mesh-refinement studies. Used only if convergence_study is enabled.",
+    ("Study", "convergence_csv"): "Optional path to a CSV file where the convergence table will be saved. Enabled only when convergence_study is true (and Problem.type is MMS). Leave empty to disable CSV output.",
 }
 
 PATH_FIELDS = {
     ("Mesh", "mesh_file"),
     ("Output", "error_file"),
     ("Output", "vtk_directory"),
-    ("Output", "convergence_csv"),
+    ("Study", "convergence_csv"),
+    ("Study", "dissipation_csv"),
+    ("Study", "modal_csv"),
 }
 
 
@@ -473,8 +495,16 @@ class PrmGUI(tk.Tk):
                                 p = filedialog.askdirectory(title="Select VTK output directory")
                                 if p:
                                     v.set(p)
-                            elif (s, k) == ("Output", "convergence_csv"):
+                            elif (s, k) == ("Study", "convergence_csv"):
                                 p = filedialog.asksaveasfilename(title="Select convergence CSV file", defaultextension=".csv", filetypes=[("CSV files", ("*.csv", "*.*"))])
+                                if p:
+                                    v.set(p)
+                            elif (s, k) == ("Study", "dissipation_csv"):
+                                p = filedialog.asksaveasfilename(title="Select dissipation CSV file", defaultextension=".csv", filetypes=[("CSV files", ("*.csv", "*.*"))])
+                                if p:
+                                    v.set(p)
+                            elif (s, k) == ("Study", "modal_csv"):
+                                p = filedialog.asksaveasfilename(title="Select modal CSV file", defaultextension=".csv", filetypes=[("CSV files", ("*.csv", "*.*"))])
                                 if p:
                                     v.set(p)
                         return _pick
@@ -513,7 +543,11 @@ class PrmGUI(tk.Tk):
                     var.trace_add("write", lambda *a: self.update_widget_states())
                 if section == "Output" and key == "compute_error":
                     var.trace_add("write", lambda *a: self.update_widget_states())
-                if section == "Output" and key == "convergence_study":
+                if section == "Study" and key == "convergence_study":
+                    var.trace_add("write", lambda *a: self.update_widget_states())
+                if section == "Study" and key == "enable_dissipation":
+                    var.trace_add("write", lambda *a: self.update_widget_states())
+                if section == "Study" and key == "enable_modal":
                     var.trace_add("write", lambda *a: self.update_widget_states())
                 if section == "Time" and key == "scheme":
                     var.trace_add("write", lambda *a: self.update_widget_states())
@@ -603,6 +637,18 @@ class PrmGUI(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error", f"Could not parse file: {e}")
             return
+        # migrate old convergence_* settings from Output to Study section if needed
+        if "Output" in data and "convergence_study" in data["Output"]:
+            if "Study" not in data:
+                data["Study"] = {}
+            for k in ("convergence_study", "convergence_type", "convergence_csv"):
+                if k in data["Output"]:
+                    data["Study"][k] = data["Output"][k]
+            # remove old keys
+            for k in ("convergence_study", "convergence_type", "convergence_csv"):
+                if k in data["Output"]:
+                    del data["Output"][k]
+
         # populate fields where possible
         for sec, kv in data.items():
             if sec not in self.vars:
@@ -731,8 +777,10 @@ class PrmGUI(tk.Tk):
         - Boundary condition.type: 'Expr' -> enable g_expr and v_expr; otherwise disable them.
         - Time.scheme: enable theta only for Theta; enable beta/gamma only for Newmark; disable all three for CentralDifference.
         - Output.compute_error: when false -> disable error_file, when true -> enable.
-        - Output.convergence_study: only enabled when Problem.type == 'MMS'; when enabled -> enable convergence_type, else disable.
-        - Output.convergence_csv: only enabled when Problem.type == 'MMS' and Output.convergence_study is true.
+        - Study.enable_dissipation: when false -> disable dissipation_every/dissipation_csv.
+        - Study.enable_modal: when false -> disable modal_every/modal_csv/modal_k/modal_l.
+        - Study.convergence_study: only enabled when Problem.type == 'MMS'; when enabled -> enable convergence_type, else disable.
+        - Study.convergence_csv: only enabled when Problem.type == 'MMS' and Study.convergence_study is true.
         """
         # Problem.type rules
         try:
@@ -805,15 +853,15 @@ class PrmGUI(tk.Tk):
         except Exception:
             pass
 
-        # Output.convergence_study rules
+        # Study.convergence_study rules
         try:
-            conv_enabled = self.vars["Output"]["convergence_study"]["var"].get()
+            conv_enabled = self.vars["Study"]["convergence_study"]["var"].get()
         except Exception:
             conv_enabled = False
 
         # convergence_study checkbox itself should only be interactive in MMS mode
-        conv_chk = self.vars["Output"]["convergence_study"]["widget"]
-        conv_reason = self.vars["Output"]["convergence_study"]["reason_label"]
+        conv_chk = self.vars["Study"]["convergence_study"]["widget"]
+        conv_reason = self.vars["Study"]["convergence_study"]["reason_label"]
         try:
             if ptype == "mms":
                 conv_chk.configure(state="normal")
@@ -823,13 +871,13 @@ class PrmGUI(tk.Tk):
                 conv_reason.configure(text="Requires Problem.type = MMS")
                 # also force it off when not MMS, to avoid saving misleading configs
                 if conv_enabled:
-                    self.vars["Output"]["convergence_study"]["var"].set(False)
+                    self.vars["Study"]["convergence_study"]["var"].set(False)
                     conv_enabled = False
         except Exception:
             pass
 
-        conv_type_widget = self.vars["Output"]["convergence_type"]["widget"]
-        conv_type_reason = self.vars["Output"]["convergence_type"]["reason_label"]
+        conv_type_widget = self.vars["Study"]["convergence_type"]["widget"]
+        conv_type_reason = self.vars["Study"]["convergence_type"]["reason_label"]
         try:
             if ptype == "mms" and conv_enabled:
                 conv_type_widget.configure(state="readonly")
@@ -843,10 +891,10 @@ class PrmGUI(tk.Tk):
         except Exception:
             pass
 
-        # Output.convergence_csv rules
+        # Study.convergence_csv rules
         try:
-            conv_csv_widget = self.vars["Output"]["convergence_csv"]["widget"]
-            conv_csv_reason = self.vars["Output"]["convergence_csv"]["reason_label"]
+            conv_csv_widget = self.vars["Study"]["convergence_csv"]["widget"]
+            conv_csv_reason = self.vars["Study"]["convergence_csv"]["reason_label"]
             if ptype == "mms" and conv_enabled:
                 conv_csv_widget.configure(state="normal")
                 conv_csv_reason.configure(text="")
@@ -857,8 +905,8 @@ class PrmGUI(tk.Tk):
                 else:
                     conv_csv_reason.configure(text="Enable convergence_study")
                 # clear it when disabled to avoid populating it inadvertently
-                if self.vars["Output"]["convergence_csv"]["var"].get():
-                    self.vars["Output"]["convergence_csv"]["var"].set("")
+                if self.vars["Study"]["convergence_csv"]["var"].get():
+                    self.vars["Study"]["convergence_csv"]["var"].set("")
         except Exception:
             pass
 
@@ -910,6 +958,46 @@ class PrmGUI(tk.Tk):
         except Exception:
             pass
 
+        # -------------------- Study.enable_dissipation rules --------------------
+        try:
+            diss_enabled = self.vars["Study"]["enable_dissipation"]["var"].get()
+        except Exception:
+            diss_enabled = False
+
+        for key in ("dissipation_every", "dissipation_csv"):
+            if "Study" in self.vars and key in self.vars["Study"]:
+                widget = self.vars["Study"][key]["widget"]
+                reason_lbl = self.vars["Study"][key]["reason_label"]
+                try:
+                    if diss_enabled:
+                        widget.configure(state="normal")
+                        reason_lbl.configure(text="")
+                    else:
+                        widget.configure(state="disabled")
+                        reason_lbl.configure(text="Enable enable_dissipation")
+                except Exception:
+                    pass
+
+        # -------------------- Study.enable_modal rules --------------------
+        try:
+            modal_enabled = self.vars["Study"]["enable_modal"]["var"].get()
+        except Exception:
+            modal_enabled = False
+
+        for key in ("modal_every", "modal_csv", "modal_k", "modal_l"):
+            if "Study" in self.vars and key in self.vars["Study"]:
+                widget = self.vars["Study"][key]["widget"]
+                reason_lbl = self.vars["Study"][key]["reason_label"]
+                try:
+                    if modal_enabled:
+                        widget.configure(state="normal")
+                        reason_lbl.configure(text="")
+                    else:
+                        widget.configure(state="disabled")
+                        reason_lbl.configure(text="Enable enable_modal")
+                except Exception:
+                    pass
+
         # Keep path pickers in sync with their entry state
         for sec, kv in self.vars.items():
             for key, record in kv.items():
@@ -921,7 +1009,9 @@ class PrmGUI(tk.Tk):
 
                 if record.get("is_bool"):
                     try:
-                        record["widget"].configure(selectcolor=THEMES[self.theme_name]["entry"] if enabled else THEMES[self.theme_name]["disabled_entry"])
+                        record["widget"].configure(
+                            selectcolor=THEMES[self.theme_name]["entry"] if enabled else THEMES[self.theme_name]["disabled_entry"]
+                        )
                     except Exception:
                         pass
 
@@ -967,17 +1057,17 @@ class PrmGUI(tk.Tk):
                 return False, "Missing Output.error_file while compute_error is enabled"
 
         # convergence study validation
-        conv = params.get("Output", {}).get("convergence_study")
+        conv = params.get("Study", {}).get("convergence_study")
         if conv in (True, "true", "True"):
             if ptype != "MMS":
-                return False, "Output.convergence_study can only be enabled when Problem.type is 'MMS'"
-            ctype = str(params.get("Output", {}).get("convergence_type", "")).strip().lower()
-            if ctype not in ("Time", "Space"):
-                return False, "Missing/invalid Output.convergence_type (must be 'Time' or 'Space') when convergence_study is enabled"
+                return False, "Study.convergence_study can only be enabled when Problem.type is 'MMS'"
+            ctype = str(params.get("Study", {}).get("convergence_type", "")).strip().lower()
+            if ctype not in ("time", "space"):
+                return False, "Missing/invalid Study.convergence_type (must be 'Time' or 'Space') when convergence_study is enabled"
         else:
             # if convergence is disabled, the csv path must not be set
-            if params.get("Output", {}).get("convergence_csv"):
-                return False, "Output.convergence_csv can only be set when Output.convergence_study is enabled"
+            if params.get("Study", {}).get("convergence_csv"):
+                return False, "Study.convergence_csv can only be set when Study.convergence_study is enabled"
 
         return True, ""
 

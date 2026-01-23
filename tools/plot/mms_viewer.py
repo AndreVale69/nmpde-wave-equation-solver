@@ -1,982 +1,517 @@
-import hashlib
-import io
-import json
-import re
-from dataclasses import dataclass
+# Refactored Wave CSV Viewer
+# Single upload -> auto-detect -> auto-plot
+#
+# This Streamlit app:
+# - accepts arbitrary CSV files
+# - detects whether they match Wave solver output schemas
+# - classifies them (MMS / Study / Convergence)
+# - renders the appropriate plots & tables automatically
 
-import numpy as np
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import List, Literal
+
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 try:
-    # When running from repo root
-    from tools.plot.convergence_utils import (
+    from tools.plot.utils.generate_markdown import ollama_generate_markdown, ollama_generate_markdown_stream
+    from tools.plot.utils.llm_utils import build_interpretation_prompt, build_comparison_prompt
+    from tools.plot.utils.csv_utils import read_csv_robust
+    from tools.plot.plot_convergence import build_figure as build_convergence_figure
+    from tools.plot.utils.convergence_utils import (
         compute_observed_orders,
-        detect_kind,
-        load_convergence_csv,
-        pretty_metric_name,
         summarize_fits,
     )
-except Exception:  # pragma: no cover
-    # When running from within tools/plot
-    from convergence_utils import (
+    from tools.plot.markdown.modal_explanation import modal_explanation_for_dummies
+    from tools.plot.markdown.modal_explanation import modal_explanation_text
+    from tools.plot.markdown.dissipation_explanation import dissipation_explanation, dissipation_explanation_for_dummies
+    from tools.plot.markdown.convergence_explanation import convergence_explanation, convergence_explanation_for_dummies
+    from tools.plot.markdown.mms_explanation import mms_explanation, mms_explanation_for_dummies
+    from tools.plot.utils.plot_comparison import plot_compare_timeseries, compare_expander_timeseries
+except Exception:
+    # Standalone layout (same folder)
+    from utils.generate_markdown import ollama_generate_markdown, ollama_generate_markdown_stream
+    from utils.llm_utils import build_interpretation_prompt, build_comparison_prompt
+    from utils.csv_utils import read_csv_robust
+    from plot_convergence import build_figure as build_convergence_figure
+    from utils.convergence_utils import (
         compute_observed_orders,
-        detect_kind,
-        load_convergence_csv,
-        pretty_metric_name,
         summarize_fits,
     )
+    from markdown.modal_explanation import modal_explanation_for_dummies
+    from markdown.modal_explanation import modal_explanation_text
+    from markdown.dissipation_explanation import dissipation_explanation, dissipation_explanation_for_dummies
+    from markdown.convergence_explanation import convergence_explanation, convergence_explanation_for_dummies
+    from markdown.mms_explanation import mms_explanation, mms_explanation_for_dummies
+    from utils.plot_comparison import plot_compare_timeseries, compare_expander_timeseries
+
+if "parsed_by_kind" not in st.session_state:
+    st.session_state["parsed_by_kind"] = {}
 
 
-@dataclass(frozen=True)
-class _CachedUpload:
-    name: str
-    content_hash: str
-    data: bytes
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    return df
 
 
-def _sha256_bytes(b: bytes) -> str:
-    return hashlib.sha256(b).hexdigest()
+@dataclass
+class ClassificationResult:
+    recognized: bool
+    kind: Literal[
+        "mms",
+        "study_dissipation",
+        "study_modal",
+        "conv",
+        "unknown",
+    ]
+    confidence: float
+    reasons: List[str]
+    x_candidates: List[str]
 
 
-def _ensure_upload_cache():
-    """Initialize session-state caches used to persist uploads across reruns."""
-    st.session_state.setdefault("uploads_mms", {})   # hash -> _CachedUpload
-    st.session_state.setdefault("uploads_conv", {})  # hash -> _CachedUpload
-    st.session_state.setdefault("aliases_conv", {})  # filename -> alias
+def classify_csv(df: pd.DataFrame, filename: str) -> ClassificationResult:
+    cols = set(df.columns)
+    name = (filename or "").lower()
 
+    def has_all(req: set[str]) -> bool:
+        return all(c in cols for c in req)
 
-def _ingest_uploads(uploaded_files, *, target: str):
-    """Read uploaded files and persist them in session_state.
+    def has_any(opts: set[str]) -> bool:
+        return any(c in cols for c in opts)
 
-    target: 'MMS' or 'conv'
-    """
-    if uploaded_files is None:
-        return
-
-    key = "uploads_mms" if target == "MMS" else "uploads_conv"
-
-    for f in uploaded_files:
-        try:
-            bs = f.getvalue()
-        except Exception:
-            # Streamlit UploadedFile always supports getvalue, but keep it defensive.
-            bs = f.read()
-
-        h = _sha256_bytes(bs)
-        if h not in st.session_state[key]:
-            st.session_state[key][h] = _CachedUpload(name=f.name, content_hash=h, data=bs)
-
-
-st.set_page_config(page_title="Wave Solver Dashboard", layout="wide")
-
-st.title("Wave Solver Dashboard")
-
-# init persistence
-_ensure_upload_cache()
-
-# ------------------------
-# Sidebar: mode selector (must be early)
-# ------------------------
-st.sidebar.header("Mode")
-mode = st.sidebar.radio(
-    "Viewer",
-    options=["MMS", "Convergence"],
-    index=0,
-    help="Switch between MMS time-series error viewer and convergence study viewer.",
-)
-
-# Global controls for persisted uploads
-with st.sidebar.expander("Uploads (persisted)", expanded=False):
-    st.caption("Uploads are cached in-session so switching mode won't clear them.")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("Clear MMS uploads"):
-            st.session_state["uploads_mms"] = {}
-            st.rerun()
-    with col_b:
-        if st.button("Clear Conv uploads"):
-            st.session_state["uploads_conv"] = {}
-            st.rerun()
-
-    st.write(f"MMS cached: {len(st.session_state['uploads_mms'])}")
-    st.write(f"Conv cached: {len(st.session_state['uploads_conv'])}")
-
-
-if mode == "Convergence":
-    st.write(
-        "Upload convergence CSVs produced by the solver (`write_space_convergence_csv` / `write_time_convergence_csv`). "
-        "You'll get log-log plots, fitted observed orders, and per-step order tables."
-    )
-
-    uploaded_conv = st.file_uploader(
-        "Convergence CSVs",
-        type=["csv"],
-        accept_multiple_files=True,
-        key="uploader_conv",
-        help="Space: h,u_L2,u_H1,v_L2,p_*.  Time: dt,u_L2,u_H1,v_L2,q_*.",
-    )
-
-    # Persist new uploads
-    _ingest_uploads(uploaded_conv, target="conv")
-
-    if not st.session_state["uploads_conv"]:
-        st.info("Upload at least one convergence CSV to start.")
-        st.stop()
-
-    # Ensure aliases exist for current uploaded filenames
-    conv_names = [cu.name for cu in st.session_state["uploads_conv"].values()]
-    for n in conv_names:
-        st.session_state["aliases_conv"].setdefault(n, n)
-
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Convergence file aliases")
-    for n in sorted(conv_names):
-        key = f"alias_conv__{n}"
-        st.session_state["aliases_conv"][n] = st.sidebar.text_input(
-            f"Alias for {n}",
-            value=st.session_state["aliases_conv"].get(n, n),
-            key=key,
+    # -------------------------------------------------------------------------
+    # Study – dissipation
+    # n, t, e, (optional e_over_e0)
+    # -------------------------------------------------------------------------
+    if has_all({"n", "t", "e"}):
+        score = 3.0
+        if "e_over_e0" in cols:
+            score += 1.0
+        if "dissip" in name:
+            score += 0.2
+        return ClassificationResult(
+            True, "study_dissipation", score, ["found n,t,e"], ["t", "n"]
         )
 
-    conv_dfs = []
-    for cu in st.session_state["uploads_conv"].values():
-        try:
-            alias = st.session_state["aliases_conv"].get(cu.name, cu.name)
-            df = load_convergence_csv(io.BytesIO(cu.data), name=alias)
-            kind = detect_kind(df)
-            df = compute_observed_orders(df)
-            df["__kind"] = kind.value
-            conv_dfs.append(df)
-        except Exception as e:
-            st.error(f"Failed loading {cu.name}: {e}")
+    # -------------------------------------------------------------------------
+    # Study – modal
+    # n, t, a, adot
+    # -------------------------------------------------------------------------
+    if has_all({"n", "t", "a", "adot"}):
+        score = 4.0 + (0.2 if "modal" in name else 0.0)
+        return ClassificationResult(
+            True, "study_modal", score, ["found n,t,a,adot"], ["t", "n"]
+        )
 
-    if not conv_dfs:
-        st.stop()
+    # -------------------------------------------------------------------------
+    # Convergence (space or time)
+    # h or dt + at least one error norm
+    # -------------------------------------------------------------------------
+    if ("h" in cols or "dt" in cols) and has_any({"u_l2", "u_h1", "v_l2"}):
+        score = 4.0 + (0.2 if "conv" in name else 0.0)
+        x_candidates = ["dt"] if "dt" in cols else ["h"]
+        return ClassificationResult(
+            True, "conv", score, ["found convergence schema"], x_candidates
+        )
 
-    kinds = sorted({df["__kind"].iloc[0] for df in conv_dfs})
-    selected_kind = st.sidebar.selectbox(
-        "Convergence kind",
-        kinds,
-        index=0,
-        help="Space = error vs h, Time = error vs dt",
-    )
+    # -------------------------------------------------------------------------
+    # MMS
+    # error_* metrics + time-like axis
+    # -------------------------------------------------------------------------
+    if any(c.startswith("error_") for c in cols) and has_any({"time", "t", "step", "n"}):
+        score = 4.0 + (0.2 if "mms" in name else 0.0)
+        x_candidates = [c for c in ["time", "t", "step", "n"] if c in cols]
+        return ClassificationResult(
+            True, "mms", score, ["found MMS error metrics"], x_candidates
+        )
 
-    active = [df for df in conv_dfs if df["__kind"].iloc[0] == selected_kind]
-    xcol = "h" if selected_kind == "Space" else "dt"
-
-    st.sidebar.markdown("---")
-    metrics = ["u_L2", "u_H1", "v_L2"]
-    selected_metrics = st.sidebar.multiselect("Metrics", metrics, default=metrics)
-
-    st.subheader("Error vs resolution (log-log)")
-    fig = go.Figure()
-    for df in active:
-        # __name is the alias injected above
-        run_name = df.get("__name", pd.Series(["run"])).iloc[0]
-        for m in selected_metrics:
-            if m not in df.columns:
-                continue
-            fig.add_trace(
-                go.Scatter(
-                    x=df[xcol],
-                    y=df[m],
-                    mode="lines+markers",
-                    name=f"{run_name} · {pretty_metric_name(m)}",
-                )
-            )
-
-    fig.update_xaxes(title_text=xcol, type="log")
-    fig.update_yaxes(title_text="error", type="log")
-    fig.update_layout(
-        title=f"{selected_kind.title()} convergence: error vs {xcol}",
-        legend=dict(orientation="h"),
-        height=520,
-        margin=dict(l=40, r=20, t=60, b=50),
-    )
-    st.plotly_chart(fig, width="stretch")
-
-    st.markdown("### Fitted observed order (global fit)")
-    fit_tables = []
-    for df in active:
-        run_name = df.get("__name", pd.Series(["run"])).iloc[0]
-        fits = summarize_fits(df, error_cols=selected_metrics)
-        if fits.empty:
-            continue
-        fits.insert(0, "run", run_name)
-        fits["metric"] = fits["metric"].map(pretty_metric_name)
-        fit_tables.append(fits)
-
-    if fit_tables:
-        st.dataframe(pd.concat(fit_tables, ignore_index=True), width="stretch", hide_index=True)
-
-    st.markdown("### Raw data (with per-step orders)")
-    for df in active:
-        run_name = df.get("__name", pd.Series(["run"])).iloc[0]
-        with st.expander(f"{run_name} ({xcol} rows: {len(df)})", expanded=False):
-            order_cols = (
-                ["p_uL2", "p_uH1", "p_vL2"] if selected_kind == "Space" else ["q_uL2", "q_uH1", "q_vL2"]
-            )
-            cols = [xcol] + selected_metrics + [c for c in order_cols if c in df.columns]
-            if "mesh" in df.columns:
-                cols.append("mesh")
-            st.dataframe(df[cols], width="stretch", hide_index=True)
-
-    st.stop()
-
-# MMS mode: existing behavior continues below
-st.write(
-    "Upload one or more CSVs (with columns like `time`, `error_u_L2`, `error_u_H1`, etc.) and compare plots."
-)
-
-def _normalize_column_name(c: str) -> str:
-    """Best-effort cleanup for messy CSV headers.
-
-    Handles cases like columns literally named "\"                            \"" or with
-    leading/trailing whitespace.
-    """
-    if c is None:
-        return ""
-    c = str(c)
-    # strip whitespace and surrounding quotes
-    c = c.strip().strip("\"").strip("'").strip()
-    # collapse internal whitespace (e.g. accidental padding)
-    c = re.sub(r"\s+", " ", c)
-    return c
+    return ClassificationResult(False, "unknown", 0.0, ["unrecognized schema"], [])
 
 
-def _drop_spacer_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Drop columns that are empty after normalization.
-    drop_cols = []
-    rename_map = {}
-    for c in df.columns:
-        nc = _normalize_column_name(c)
-        if nc == "":
-            drop_cols.append(c)
-        else:
-            rename_map[c] = nc
-    df = df.rename(columns=rename_map)
-    if drop_cols:
-        df = df.drop(columns=drop_cols)
-    return df
+def ai_expander(
+        prefix: str, _res: ClassificationResult, _uploaded_file
+) -> None:
+    with st.expander(f"🤖 AI interpretation ({prefix})"):
+        api_key = None
+        with st.expander("🔑 Setting up Ollama API access"):
+            st.markdown(r"""
+To use this feature, you need access to an Ollama-compatible model (hosted or local).
+If you want to run a cloud-hosted model, you must have an Ollama account and API key.
 
+### Steps to get an Ollama API key and set it up (safest method)
 
-def _coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Convert any non-index columns that look numeric.
-    # Keep as-is for columns that can't be coerced.
-    for c in df.columns:
-        if c in {"step"}:
-            try:
-                df[c] = pd.to_numeric(df[c])
-            except Exception:
-                # leave column unchanged if conversion fails
-                pass
-            continue
-        if c in {"Time", "t"} or any(
-            c.startswith(p)
-            for p in (
-                "error_",
-                "delta_",
-                "rel_delta_",
-                "cum_mean_",
-                "cum_rms_",
-                "h",
-            )
+1. Sign up at https://ollama.com/
+2. Once logged in, go to Settings: https://ollama.com/settings
+3. Generate an API key from https://ollama.com/settings/keys and click "Add API Key".
+4. Set a useful name and copy the generated key.
+5. The API key must be set:
+    - If you are running this app locally, set the environment variable `OLLAMA_API_KEY` before starting Streamlit.
+    - If you are using Docker, set the environment variable in the Docker run command:
+      ```bash
+      docker build -t nm4pde-mms-viewer tools/plot
+      docker run --rm -p 8501:8501 -e OLLAMA_API_KEY="your_api_key_here" nm4pde-mms-viewer
+      ```
+6. Restart the app if it was already running.
+
+---
+
+### Manually specifying API key (not recommended)
+
+This is not recommended for security reasons, but if you want to specify the API key directly in the app,
+you can do so by setting the `OLLAMA_API_KEY` environment variable in the app code before making any requests.
+""")
+            # create input box for API key (optional)
+            api_key = st.text_input("Ollama API Key (optional)",
+                                    type="password",
+                                    key="ollama_api_key_" + _uploaded_file.name,
+                                    placeholder="Enter your API key here (or leave blank to use env var)")
+
+        # if API key provided, set env var
+        if api_key:
+            os.environ["OLLAMA_API_KEY"] = api_key
+
+        host = st.text_input("Ollama host", value="https://ollama.com", key="ollama_host_" + _uploaded_file.name,
+                             help="Ollama host URL (default: https://ollama.com for cloud-hosted models). For local Ollama server, use http://localhost:11434")
+        model = st.text_input("Model", value="gpt-oss:120b-cloud", key="ollama_model_" + _uploaded_file.name,
+                              help="Ollama-compatible model name (e.g., gpt-oss:120b-cloud). See https://ollama.com/search for options.")
+
+        st.info(
+            "For best results, use a cloud-hosted model (e.g., `gpt-oss:120b-cloud`) to avoid local resource issues.",
+            icon="💡")
+
+        if st.button(
+                "Generate interpretation",
+                key=f"ollama_btn_{_uploaded_file.name}",
+                type="secondary",
         ):
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    return df
+            try:
+                with st.spinner("🤖 Generating interpretation...", show_time=True):
+                    prompt = build_interpretation_prompt(_res.kind, df)
+
+                    out = st.empty()
+                    acc = ""
+
+                    for chunk in ollama_generate_markdown_stream(
+                            prompt=prompt,
+                            model=model,
+                            host=host,
+                    ):
+                        acc += chunk
+                        out.markdown(acc)
+
+                out.markdown(acc)
+
+            except Exception as e:
+                st.error(f"Ollama error: {e}")
 
 
-def _ensure_canonical_schema(df: pd.DataFrame) -> pd.DataFrame:
-    """Add/alias columns so the rest of the app can rely on canonical names.
+# -----------------------------------------------------------------------------
+# Streamlit UI
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Wave CSV Inspector", layout="wide")
+st.title("Wave Solver CSV Inspector & Viewer")
 
-    Canonical names (new):
-      - error_u_L2, error_u_H1, error_v_L2 (and optionally error_v_H1)
-      - delta_u_L2, delta_u_H1, delta_v_L2
-      - rel_delta_u_L2, rel_delta_u_H1, rel_delta_v_L2
-      - cum_mean_u_L2, cum_mean_u_H1, cum_mean_v_L2
-      - cum_rms_u_L2, cum_rms_u_H1, cum_rms_v_L2
-
-    Backward-compatibility:
-      - error_u -> error_u_L2
-      - error_v -> error_v_L2
-      - delta_u -> delta_u_L2
-      - delta_v -> delta_v_L2
-      - cum_mean_u -> cum_mean_u_L2
-      - cum_rms_u  -> cum_rms_u_L2
-      - cum_mean_v -> cum_mean_v_L2
-      - cum_rms_v  -> cum_rms_v_L2
-    """
-
-    alias_pairs = {
-        "error_u": "error_u_L2",
-        "error_v": "error_v_L2",
-        "delta_u": "delta_u_L2",
-        "delta_v": "delta_v_L2",
-        "rel_delta_u": "rel_delta_u_L2",
-        "rel_delta_v": "rel_delta_v_L2",
-        "cum_mean_u": "cum_mean_u_L2",
-        "cum_rms_u": "cum_rms_u_L2",
-        "cum_mean_v": "cum_mean_v_L2",
-        "cum_rms_v": "cum_rms_v_L2",
-    }
-    for old, new in alias_pairs.items():
-        if old in df.columns and new not in df.columns:
-            df[new] = df[old]
-
-    # common legacy column name
-    if "t" in df.columns and "Time" not in df.columns:
-        df = df.rename(columns={"t": "Time"})
-
-    return df
-
-
-def _available_metrics(df: pd.DataFrame) -> dict:
-    """Return availability of metric families for UI defaults."""
-    families = {
-        "Instantaneous": [
-            "error_u_L2",
-            "error_u_H1",
-            "error_v_L2",
-            "error_v_H1",
-        ],
-        "Cumulative": [
-            "cum_mean_u_L2",
-            "cum_rms_u_L2",
-            "cum_mean_u_H1",
-            "cum_rms_u_H1",
-            "cum_mean_v_L2",
-            "cum_rms_v_L2",
-        ],
-        "Delta": [
-            "delta_u_L2",
-            "delta_u_H1",
-            "delta_v_L2",
-            "delta_v_H1",
-        ],
-        "Rel delta": [
-            "rel_delta_u_L2",
-            "rel_delta_u_H1",
-            "rel_delta_v_L2",
-            "rel_delta_v_H1",
-        ],
-    }
-    out = {}
-    cols = set(df.columns)
-    for fam, keys in families.items():
-        out[fam] = any(k in cols for k in keys)
-    return out
-
-
-# helper: convert DataFrame (with index) to a Markdown table
-def df_with_index_to_markdown(df, index_name="metric", value_format=None):
-    cols = list(df.columns)
-    header = "| " + index_name + " | " + " | ".join(cols) + " |"
-    sep = "| --- " + " | ---" * len(cols) + " |"
-    lines = [header, sep]
-    for idx in df.index:
-        row_vals = []
-        for c in cols:
-            v = df.at[idx, c]
-            if pd.isna(v):
-                s = ""
-            else:
-                if value_format is not None:
-                    try:
-                        s = value_format(v)
-                    except Exception:
-                        s = str(v)
-                else:
-                    s = str(v)
-            row_vals.append(s)
-        lines.append("| " + str(idx) + " | " + " | ".join(row_vals) + " |")
-    return "\n".join(lines)
-
-
-# allow multiple files
-uploaded = st.file_uploader(
-    "Upload CSV(s)",
+uploaded_files = st.file_uploader(
+    "Upload CSV files (analysis type will be auto-detected).",
     type=["csv"],
     accept_multiple_files=True,
-    key="uploader_mms",
 )
 
-_ingest_uploads(uploaded, target="MMS")
-
-if not st.session_state["uploads_mms"]:
-    st.info("Upload one or more CSV files to get started.")
+if not uploaded_files:
+    st.info("Upload one or more CSV files to begin.")
     st.stop()
 
-# read cached uploads into dict: name -> DataFrame
-datasets = {}
-read_errors = []
-for cu in st.session_state["uploads_mms"].values():
+st.session_state["parsed_by_kind"] = {}
+parsed_items = []
+
+# -------------------------
+# PASS 1: parse + classify + register
+# -------------------------
+for uf in uploaded_files:
     try:
-        df = pd.read_csv(io.BytesIO(cu.data))
-        df = _drop_spacer_columns(df)
-        df = _ensure_canonical_schema(df)
-        df = _coerce_numeric_columns(df)
-        datasets[cu.name] = df
+        df = read_csv_robust(uf.read())
+        df = normalize_columns(df)
+        res = classify_csv(df, uf.name)
+        error = None
     except Exception as e:
-        read_errors.append((cu.name, str(e)))
-
-if read_errors:
-    for name, err in read_errors:
-        st.error(f"Failed to read {name}: {err}")
-
-file_names = list(datasets.keys())
-
-if not file_names:
-    st.error("No valid CSV files uploaded.")
-    st.stop()
-
-# show previews in tabs
-tabs = st.tabs(file_names)
-for name, tab in zip(file_names, tabs):
-    df = datasets[name]
-    with tab:
-        st.subheader(f"Preview - {name}")
-        st.dataframe(df.head(20), width='stretch')
-        if st.checkbox(f"Show full dataframe: {name}"):
-            st.dataframe(df, width='stretch')
-
-        st.download_button(
-            "Download full Markdown",
-            data=df_with_index_to_markdown(df, index_name="column"),
-            file_name=f"{name}_full.md",
-            mime="text/markdown",
-        )
-
-# sidebar controls
-st.sidebar.header("Files & Plots")
-selected = st.sidebar.multiselect("Select files to plot (overlay)", options=file_names, default=file_names[:1])
-if not selected:
-    st.sidebar.warning("Select at least one file to plot.")
-    st.stop()
-
-# required x-axis
-for name in selected:
-    if "Time" not in datasets[name].columns and "step" not in datasets[name].columns:
-        st.error(f"File {name} must contain a `time` or `step` column.")
-        st.stop()
-
-# Decide x-axis (time preferred)
-x_axis = st.sidebar.selectbox("X axis", options=["Time", "step"], index=0)
-# If any selected file lacks time, fall back to step automatically.
-if x_axis == "Time" and any("Time" not in datasets[n].columns for n in selected):
-    x_axis = "step"
-    st.sidebar.info("Some files are missing `time`; using `step` on the x-axis.")
-
-# sidebar plot toggles
-show_inst = st.sidebar.checkbox("Instantaneous errors (log scale)", value=True)
-show_delta = st.sidebar.checkbox("Step-to-step deltas", value=False)
-show_reldelta = st.sidebar.checkbox("Relative step-to-step deltas", value=False)
-show_table = st.sidebar.checkbox("Show comparison table", value=False)
-legend_mode = st.sidebar.selectbox("Legend placement", options=["Outside (compact)", "Inside (default)"], index=0)
-
-# Theming & palettes (Light theme removed)
-palette_choice = st.sidebar.selectbox("Color palette", options=["Default", "High contrast", "Colorblind-friendly"], index=0)
-
-# palette definitions
-palettes = {
-    "Default": px.colors.qualitative.Plotly,
-    "High contrast": ["#000000", "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628"],
-    "Colorblind-friendly": px.colors.qualitative.Set1,
-}
-palette = palettes.get(palette_choice, px.colors.qualitative.Plotly)
-
-# session-state: aliases and presets
-if "aliases" not in st.session_state:
-    st.session_state.aliases = {name: name for name in file_names}
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("File aliases")
-for name in file_names:
-    # create a stable widget key using filename
-    key = f"alias__{name}"
-    val = st.sidebar.text_input(f"Alias for {name}", value=st.session_state.aliases.get(name, name), key=key)
-    st.session_state.aliases[name] = val
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Metric selection")
-
-# Detect which norms are available across selected files, so users can actually find H1.
-# We consider H1 available if any key H1 column exists in any selected dataset.
-
-def _has_any_col(name: str, cols: set[str]) -> bool:
-    return name in cols
-
-
-def _norm_available_in_any_selected(norm: str) -> bool:
-    keys = [
-        f"error_u_{norm}",
-        f"error_v_{norm}",
-        f"cum_mean_u_{norm}",
-        f"cum_rms_u_{norm}",
-        f"delta_u_{norm}",
-        f"rel_delta_u_{norm}",
-    ]
-    for n in selected:
-        cols = set(datasets[n].columns)
-        if any(k in cols for k in keys):
-            return True
-    return False
-
-
-available_norms = [n for n in ("L2", "H1") if _norm_available_in_any_selected(n)]
-if not available_norms:
-    available_norms = ["L2", "H1"]
-
-metric_norm = st.sidebar.selectbox("Norm", options=available_norms, index=0)
-
-if "H1" not in available_norms:
-    st.sidebar.warning(
-        "No H1 columns detected in the selected file(s). "
-        "To see H1 plots, the CSV must contain columns like `error_u_H1`, `delta_u_H1`, `cum_mean_u_H1`, ..."
-    )
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Presets")
-preset_file = st.sidebar.file_uploader("Load preset (JSON)", type=["json"])
-if preset_file is not None:
-    try:
-        pdata = json.load(preset_file)
-        # only set values that exist in the preset
-        if "aliases" in pdata:
-            for k, v in pdata["aliases"].items():
-                if k in st.session_state.aliases:
-                    st.session_state.aliases[k] = v
-        if "selected" in pdata:
-            # update selected via session state trick
-            st.session_state["_preset_selected"] = pdata["selected"]
-        if "legend_mode" in pdata:
-            st.session_state["_preset_legend_mode"] = pdata["legend_mode"]
-        if "show_inst" in pdata:
-            st.session_state["_preset_show_inst"] = pdata["show_inst"]
-        if "show_delta" in pdata:
-            st.session_state["_preset_show_delta"] = pdata["show_delta"]
-        if "show_reldelta" in pdata:
-            st.session_state["_preset_show_reldelta"] = pdata.get("show_reldelta", show_reldelta)
-        if "metric_norm" in pdata:
-            st.session_state["_preset_metric_norm"] = pdata["metric_norm"]
-        if "x_axis" in pdata:
-            st.session_state["_preset_x_axis"] = pdata["x_axis"]
-
-        selected = st.session_state.get("_preset_selected", selected)
-        legend_mode = st.session_state.get("_preset_legend_mode", legend_mode)
-        show_inst = st.session_state.get("_preset_show_inst", show_inst)
-        show_delta = st.session_state.get("_preset_show_delta", show_delta)
-        show_reldelta = st.session_state.get("_preset_show_reldelta", show_reldelta)
-        metric_norm = st.session_state.get("_preset_metric_norm", metric_norm)
-        x_axis = st.session_state.get("_preset_x_axis", x_axis)
-
-        st.sidebar.success("Preset loaded successfully.")
-    except Exception as e:
-        st.sidebar.error(f"Failed to load preset: {e}")
-
-# expose save preset button
-if st.sidebar.button("Save current preset"):
-    preset = {
-        "aliases": st.session_state.aliases,
-        "selected": selected,
-        "legend_mode": legend_mode,
-        "show_inst": show_inst,
-        "show_delta": show_delta,
-        "show_reldelta": show_reldelta,
-        "metric_norm": metric_norm,
-        "x_axis": x_axis,
-    }
-    st.sidebar.download_button(
-        "Download preset.json",
-        data=json.dumps(preset, indent=2),
-        file_name="mms_preset.json",
-        mime="application/json",
-    )
-
-
-def _get_x(df: pd.DataFrame, x_axis: str):
-    if x_axis in df.columns:
-        return df[x_axis]
-    # fallback
-    if "Time" in df.columns:
-        return df["Time"]
-    return df.index
-
-
-def _col(metric: str, var: str, norm: str):
-    # metric: error / delta / rel_delta / cum_mean / cum_rms
-    return f"{metric}_{var}_{norm}"
-
-
-def _help_block(title: str, body_md: str):
-    """Reusable help expander used under each plot section."""
-    with st.expander(f"Help: {title}", expanded=False):
-        st.markdown(body_md)
-
-
-def _norm_cols_hint(norm: str) -> str:
-    return (
-        f"- Instantaneous: `error_u_{norm}`, `error_v_{norm}`\n"
-        f"- Step delta: `delta_u_{norm}`, `delta_v_{norm}`\n"
-        f"- Relative delta: `rel_delta_u_{norm}`, `rel_delta_v_{norm}`\n"
-        f"- Cumulative: `cum_mean_u_{norm}`, `cum_rms_u_{norm}`, `cum_mean_v_{norm}`, `cum_rms_v_{norm}`\n"
-    )
-
-
-# Sidebar: comparison table toggle
-if show_table:
-    _help_block(
-        "Comparison table",
-        """
-**What this is**  
-A numeric summary of the instantaneous error series for the *selected norm* (L2/H1). It's useful for quickly comparing runs without visually inspecting every plot.
-
-**What it computes (per file and variable)**  
-- min / max / mean / median / stddev  
-- RMS (root-mean-square)  
-- final value (last sample)  
-- `x_of_max` / `x_of_min` (time or step where the extreme happens)  
-- `max_rel_step_change` = max over steps of `|e_n − e_{n-1}| / |e_{n-1}|` (ignores divisions by 0)
-
-**Columns used**  
-It pulls from:  
-- `error_u_<NORM>` and/or `error_v_<NORM>`
-
-**Tips / troubleshooting**  
-- If the table is empty, your CSV likely doesn't contain the chosen norm (e.g. missing `error_u_H1`). Switch **Norm** in the sidebar or check the CSV header.  
-- If you don't have a `time` column, choose **X axis = step** (we'll still compute `x_of_*`).
-""",
-    )
-
-    # build stats table for selected files
-    stats_names = [
-        "min",
-        "max",
-        "mean",
-        "median",
-        "stddev",
-        "rms",
-        "final",
-        "x_of_max",
-        "x_of_min",
-        "max_rel_step_change",
-    ]
-
-    def compute_stats(x, series):
-        if series is None or series.dropna().empty:
-            return {k: np.nan for k in stats_names}
-        s = series.dropna().astype(float)
-        out = {}
-        out["min"] = s.min()
-        out["max"] = s.max()
-        out["mean"] = s.mean()
-        out["median"] = s.median()
-        out["stddev"] = s.std()
-        out["rms"] = np.sqrt(np.mean(s.values ** 2))
-        out["final"] = s.iloc[-1]
-        # x of extrema (time/step)
-        try:
-            idx_max = s.idxmax()
-            out["x_of_max"] = float(x.loc[idx_max]) if x is not None else np.nan
-        except Exception:
-            out["x_of_max"] = np.nan
-        try:
-            idx_min = s.idxmin()
-            out["x_of_min"] = float(x.loc[idx_min]) if x is not None else np.nan
-        except Exception:
-            out["x_of_min"] = np.nan
-        # max relative step change
-        prev = s.shift(1)
-        denom = prev.abs()
-        with np.errstate(divide="ignore", invalid="ignore"):
-            rel = (s - prev).abs() / denom
-        rel = rel.replace([np.inf, -np.inf], np.nan).dropna()
-        out["max_rel_step_change"] = rel.max() if not rel.empty else np.nan
-        return out
-
-    cols = {}
-    for name in selected:
-        df = datasets[name]
-        alias = st.session_state.aliases.get(name, name)
-        x = _get_x(df, x_axis)
-
-        # u and v, chosen norm
-        for var in ("u", "v"):
-            c = _col("error", var, metric_norm)
-            if c in df.columns:
-                stats = compute_stats(x, df[c])
-                cols[f"{alias}: {var} ({metric_norm})"] = [stats.get(k, np.nan) for k in stats_names]
-
-    if not cols:
-        st.warning("No matching error columns found for the selected norm.")
-    else:
-        stats_df = pd.DataFrame(cols, index=stats_names)
-        stats_display = stats_df.copy()
-        for c in stats_display.columns:
-            stats_display[c] = stats_display[c].map(lambda x: "{:.5e}".format(x) if pd.notna(x) else "")
-
-        st.subheader("Comparison table: summary statistics")
-        st.caption(f"Based on `{x_axis}` and `{metric_norm}` instantaneous errors.")
-        st.dataframe(stats_display.style.set_table_attributes('style="font-family: monospace;"'))
-
-        md_full = df_with_index_to_markdown(
-            stats_df,
-            index_name="stat",
-            value_format=lambda x: "{:.5e}".format(x) if pd.notna(x) else "",
-        )
-        st.download_button(
-            "Download comparison Markdown (full)",
-            data=md_full,
-            file_name="comparison_stats_full.md",
-            mime="text/markdown",
-        )
-
-
-def fig_to_png_bytes(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=200, bbox_inches="tight")
-    buf.seek(0)
-    return buf
-
-
-def fig_to_pdf_bytes(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format="pdf", bbox_inches="tight")
-    buf.seek(0)
-    return buf
-
-
-col1, col2 = st.columns(2)
-
-# helper: style cycle (plotly will assign colors automatically)
-markers = ["circle", "square", "diamond", "triangle-up", "triangle-down", "x", "cross", "star"]
-lines = ["solid", "dash", "dot", "dashdot"]
-
-
-# helper for safe image export (handles Kaleido/Chrome missing)
-def safe_image_bytes(fig, fmt="png", scale=2):
-    try:
-        img = fig.to_image(format=fmt, scale=scale)
-        return img, None
-    except Exception as e:
-        return None, str(e)
-
-
-# ---------- FIG 1: instantaneous errors (interactive) ----------
-if show_inst:
-    st.subheader("Instantaneous MMS error - comparison (interactive)")
-    _help_block(
-        "Instantaneous MMS error",
-        f"""
-**What this plot is**  
-The per-time-step error of your numerical solution against the manufactured solution.
-
-**Columns used (chosen Norm = `{metric_norm}`)**  
-- `error_u_{metric_norm}` for displacement/solution `u`  
-- `error_v_{metric_norm}` for velocity `v` (if present)
-
-**Axis meaning**  
-- X axis: `{x_axis}` (choose in sidebar; `time` is preferred, `step` works too)  
-- Y axis: error magnitude in **log scale** (so you can see decades of change)
-
-**How to read it**  
-- A downward trend typically means the method is stable/accurate for the configuration.  
-- Oscillations can be physical (wave-like) or numerical (time integration artifacts).  
-- Sudden spikes can indicate CFL/time-step issues, solver divergence, or boundary/forcing discontinuities.
-
-**Common gotchas**  
-- If you don't see H1: your CSV must contain `error_u_H1`/`error_v_H1`. The sidebar will hide `H1` if it isn't detected.
-- If only `u` appears: the file likely doesn't contain the corresponding `v` column.
-""",
-    )
-
-    fig = go.Figure()
-
-    any_u = False
-    any_v = False
-    for i, name in enumerate(selected):
-        df = datasets[name]
-        x = _get_x(df, x_axis)
-        alias = st.session_state.aliases.get(name, name)
-        marker_sym = markers[i % len(markers)]
-        dash = lines[i % len(lines)]
-        color = palette[i % len(palette)]
-        marker_outline = "#ffffff"
-
-        cu = _col("error", "u", metric_norm)
-        cv = _col("error", "v", metric_norm)
-        if cu in df.columns:
-            any_u = True
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=df[cu],
-                    mode="lines+markers",
-                    name=f"{alias}: u ({metric_norm})",
-                    marker=dict(symbol=marker_sym, color=color, line=dict(color=marker_outline, width=1)),
-                    line=dict(color=color, dash=dash, width=2),
-                )
-            )
-        if cv in df.columns:
-            any_v = True
-            fig.add_trace(
-                go.Scatter(
-                    x=x,
-                    y=df[cv],
-                    mode="lines+markers",
-                    name=f"{alias}: v ({metric_norm})",
-                    marker=dict(symbol=marker_sym, color=color, line=dict(color=marker_outline, width=1)),
-                    line=dict(color=color, dash=dash, width=2),
-                )
+        df = None
+        res = None
+        error = f"Failed to parse CSV: {e}"
+
+    parsed_items.append({
+        "uf": uf,
+        "df": df,
+        "res": res,
+        "error": error
+    })
+
+    if error is None and res.recognized:
+        st.session_state["parsed_by_kind"].setdefault(res.kind, [])
+        st.session_state["parsed_by_kind"][res.kind].append({"name": uf.name, "df": df.copy()})
+
+for item in parsed_items:
+    uf = item["uf"]
+    df = item["df"]
+    res = item["res"]
+
+    st.markdown("---")
+    st.subheader(uf.name)
+
+    if item["error"] is not None:
+        st.error(item["error"])
+        continue
+
+    if not res.recognized:
+        st.error("❌ Unknown CSV format (not recognized as Wave solver output)")
+        st.write("Columns found:", sorted(df.columns))
+        st.dataframe(df.head(50))
+        continue
+
+    # -------------------------------------------------------------------------
+    # Dispatch plotting
+    # -------------------------------------------------------------------------
+    if res.kind == "study_dissipation":
+        if "E" in df.columns:
+            st.write("#### Energy summary")
+
+            E0 = df["E"].iloc[0]
+            E_end = df["E"].iloc[-1]
+            rel_change = (E_end - E0) / E0 if E0 != 0 else float("nan")
+
+            summary = pd.DataFrame(
+                {
+                    "Initial energy E(0)": [E0],
+                    "Final energy E(T)": [E_end],
+                    "Relative change (E(T)-E(0))/E(0)": [rel_change],
+                }
             )
 
-    if not any_u and not any_v:
-        st.warning(f"None of the selected files contain instantaneous `{metric_norm}` error columns.")
+            st.dataframe(summary, width='stretch')
 
-    fig.update_xaxes(title_text=x_axis)
-    fig.update_yaxes(title_text=f"{metric_norm} error", type="log")
-    fig.update_yaxes(showgrid=True)
-    st.plotly_chart(fig, width='stretch')
+        if "E_over_E0" in df.columns:
+            st.write("#### Normalized energy extrema")
+            extrema = pd.DataFrame(
+                {
+                    "min(E/E0)": [df["E_over_E0"].min()],
+                    "max(E/E0)": [df["E_over_E0"].max()],
+                }
+            )
+            st.dataframe(extrema, width='stretch')
 
-    st.download_button(
-        "Download instantaneous series JSON",
-        data=fig.to_json(),
-        file_name="instantaneous_plot.json",
-        mime="application/json",
-    )
+        st.write("### Energy vs time")
+        # st.line_chart(df.set_index("t")[["e"]])
+        fig = plot_compare_timeseries({uf.name: df}, "t", ["e"], title="Energy vs time")
+        st.plotly_chart(fig, width="stretch")
 
+        if "e_over_e0" in df.columns:
+            st.write("### $E / E_0$ vs time")
+            fig = plot_compare_timeseries({uf.name: df}, "t", ["e_over_e0"], title="Normalized Energy E / E₀ vs time")
+            st.plotly_chart(fig, width="stretch")
 
-# ---------- FIG 3: deltas (interactive) ----------
-if show_delta:
-    st.subheader("Step-to-step variation - comparison (interactive)")
-    _help_block(
-        "Step-to-step deltas",
-        f"""
-**What this plot is**  
-The absolute change of the error from one sample to the next. It helps you spot bursts/instabilities.
+        y_cols = []
+        if "e" in df.columns:
+            y_cols.append("e")
+        if "e_over_e0" in df.columns:
+            y_cols.append("e_over_e0")
+        # Default: plot current file alone (Plotly = legend toggling)
+        if y_cols:
+            st.write("### Energy time series")
+            fig = plot_compare_timeseries({uf.name: df}, "t", y_cols, title="Energy time series")
+            st.plotly_chart(fig, width="stretch")
 
-Typically:
-$$
-\\Delta e_n = e_n - e_{{n-1}}
-$$
+        compare_expander_timeseries(
+            kind="study_dissipation",
+            current_name=uf.name,
+            current_df=df,
+            x_col="t",
+            y_cols=y_cols,
+            title="Energy comparison",
+            expander_label="🔁 Compare with another Energy CSV",
+            key_prefix="cmp_dissip",
+            enable_ai=True,
+            build_comparison_prompt=build_comparison_prompt,
+            stream_generate=lambda prompt, model, host: ollama_generate_markdown_stream(
+                prompt=prompt,
+                model=model,
+                host=host,
+            )
+        )
 
-(Some codes store an absolute value; this viewer simply plots what's in the CSV.)
+        with st.expander("📘 What do these plots indicate?"):
+            st.markdown(dissipation_explanation())
 
-**Columns used (chosen Norm = `{metric_norm}`)**  
-- `delta_u_{metric_norm}`, `delta_v_{metric_norm}`
+        with st.expander("📗 Energy dissipation analysis for dummies"):
+            st.markdown(dissipation_explanation_for_dummies())
 
-**How to read it**  
-- Values near 0 mean the error is evolving smoothly.  
-- Large magnitude excursions mean a sudden change in error (often aligned with sharp forcing, reflections, or a too-large dt).
+        ai_expander("Study Dissipation Analysis", res, uf)
 
-**Troubleshooting**  
-- If you don't see lines, that usually means the column isn't present (e.g. your CSV has only `delta_*_L2`). Switch Norm or regenerate the CSV.
-""",
-    )
+    elif res.kind == "study_modal":
+        st.write("#### Modal amplitude summary")
+        a_max = df["a"].abs().max()
+        a_end = df["a"].iloc[-1]
+        summary = pd.DataFrame(
+            {
+                "max |a(t)|": [a_max],
+                "final a(T)": [a_end],
+                "relative final amplitude a(T)/max|a|": [a_end / a_max if a_max != 0 else float("nan")],
+            }
+        )
+        st.dataframe(summary, width='stretch')
 
-    fig = go.Figure()
+        st.write("### Modal amplitude and velocity")
 
-    any_delta = False
-    for i, name in enumerate(selected):
-        df = datasets[name]
-        x = _get_x(df, x_axis)
-        alias = st.session_state.aliases.get(name, name)
-        dash = lines[i % len(lines)]
-        color = palette[i % len(palette)]
+        y_cols = [c for c in ["a", "adot"] if c in df.columns]
 
-        for var in ("u", "v"):
-            c = _col("delta", var, metric_norm)
-            if c in df.columns:
-                fig.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=df[c],
-                        mode="lines",
-                        name=f"{alias}: Δ{var} ({metric_norm})",
-                        line=dict(color=color, dash=dash, width=2),
-                    )
-                )
-                any_delta = True
+        fig = plot_compare_timeseries({uf.name: df}, "t", y_cols, title="Modal amplitude and velocity")
+        st.plotly_chart(fig, width="stretch")
 
-    if not any_delta:
-        st.warning("None of the selected files contain delta columns for the chosen norm.")
+        compare_expander_timeseries(
+            kind="study_modal",
+            current_name=uf.name,
+            current_df=df,
+            x_col="t",
+            y_cols=y_cols,
+            title="Modal comparison",
+            expander_label="🔁 Compare with another Modal CSV",
+            key_prefix="cmp_modal",
+            enable_ai=True,
+            build_comparison_prompt=build_comparison_prompt,
+            stream_generate=lambda prompt, model, host: ollama_generate_markdown_stream(
+                prompt=prompt,
+                model=model,
+                host=host,
+            )
+        )
 
-    fig.update_xaxes(title_text=x_axis)
-    fig.update_yaxes(title_text="Increment")
-    fig.update_yaxes(showgrid=True)
-    st.plotly_chart(fig, width='stretch')
+        with st.expander("📘 What does this plot indicate?"):
+            st.markdown(modal_explanation_text())
 
-    st.download_button(
-        "Download deltas series JSON",
-        data=fig.to_json(),
-        file_name="deltas_plot.json",
-        mime="application/json",
-    )
+        with st.expander("📗 Modal amplitude and velocity for dummies"):
+            st.markdown(modal_explanation_for_dummies())
 
+        ai_expander("Modal Analysis", res, uf)
 
-# ---------- FIG 4: relative deltas (interactive) ----------
-if show_reldelta:
-    st.subheader("Relative step-to-step variation - comparison (interactive)")
-    _help_block(
-        "Relative step-to-step deltas",
-        f"""
-**What this plot is**  
-The step-to-step change scaled by the previous value, typically:
-$$
-r_n = \\frac{{|e_n - e_{{n-1}}|}}{{|e_{{n-1}}|}}
-$$
+    elif res.kind == "conv":
+        # Reconstruct canonical convergence column names
+        df_conv = df.copy()
+        rename_map = {
+            "u_l2": "u_L2",
+            "u_h1": "u_H1",
+            "v_l2": "v_L2",
+            "p_ul2": "p_uL2",
+            "p_uh1": "p_uH1",
+            "p_vl2": "p_vL2",
+            "q_ul2": "q_uL2",
+            "q_uh1": "q_uH1",
+            "q_vl2": "q_vL2",
+        }
+        df_conv = df_conv.rename(columns={k: v for k, v in rename_map.items() if k in df_conv.columns})
 
-This is a dimensionless "percent-like" change indicator.
+        x_col = "dt" if "dt" in df_conv.columns else "h"
+        y_cols = [c for c in ["u_L2", "u_H1", "v_L2"] if c in df_conv.columns]
 
-**Columns used (chosen Norm = `{metric_norm}`)**  
-- `rel_delta_u_{metric_norm}`, `rel_delta_v_{metric_norm}`
+        try:
+            st.write("### Convergence (log–log)")
+            fig = build_convergence_figure(df_conv)
+            st.plotly_chart(fig, width='stretch')
+        except Exception as e:
+            st.error(f"Failed to build convergence plot: {e}")
 
-**How to read it**  
-- Near 0: stable evolution.  
-- Large spikes: abrupt transitions or times where the denominator is small.
+        try:
+            st.write("### Fitted slopes (observed order)")
+            st.dataframe(summarize_fits(df_conv))
+        except Exception as e:
+            st.warning(f"Could not compute fitted slopes: {e}")
 
-**Important gotcha**  
-- If the previous error is ~0, the relative delta can blow up or become undefined. Your CSV generator may clamp/skip; the viewer will just plot what's provided.
-""",
-    )
+        try:
+            st.write("### Per-step observed orders")
+            st.dataframe(compute_observed_orders(df_conv))
+        except Exception as e:
+            st.warning(f"Could not compute per-step observed orders: {e}")
 
-    fig = go.Figure()
+        fig_simple = plot_compare_timeseries({uf.name: df_conv}, x_col, y_cols, title="Convergence curves")
+        st.plotly_chart(fig_simple, width="stretch")
 
-    any_delta = False
-    for i, name in enumerate(selected):
-        df = datasets[name]
-        x = _get_x(df, x_axis)
-        alias = st.session_state.aliases.get(name, name)
-        dash = lines[i % len(lines)]
-        color = palette[i % len(palette)]
+        compare_expander_timeseries(
+            kind="conv",
+            current_name=uf.name,
+            current_df=df_conv,
+            x_col=x_col,
+            y_cols=y_cols,
+            title="Convergence comparison",
+            expander_label="🔁 Compare with another Convergence CSV",
+            key_prefix="cmp_conv",
+            enable_ai=True,
+            build_comparison_prompt=build_comparison_prompt,
+            stream_generate=lambda prompt, model, host: ollama_generate_markdown_stream(
+                prompt=prompt,
+                model=model,
+                host=host,
+            )
+        )
 
-        for var in ("u", "v"):
-            c = _col("rel_delta", var, metric_norm)
-            if c in df.columns:
-                fig.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=df[c],
-                        mode="lines",
-                        name=f"{alias}: relΔ{var} ({metric_norm})",
-                        line=dict(color=color, dash=dash, width=2),
-                    )
-                )
-                any_delta = True
+        with st.expander("📘 What do these plots indicate?"):
+            st.markdown(convergence_explanation())
 
-    if not any_delta:
-        st.warning("None of the selected files contain relative-delta columns for the chosen norm.")
+        with st.expander("📗 Convergence analysis for dummies"):
+            st.markdown(convergence_explanation_for_dummies())
 
-    fig.update_xaxes(title_text=x_axis)
-    fig.update_yaxes(title_text="Relative increment")
-    fig.update_yaxes(showgrid=True)
-    st.plotly_chart(fig, width='stretch')
+        ai_expander("Convergence Analysis", res, uf)
 
-    st.download_button(
-        "Download relative deltas series JSON",
-        data=fig.to_json(),
-        file_name="rel_deltas_plot.json",
-        mime="application/json",
-    )
+    elif res.kind == "mms":
+        metrics = [c for c in df.columns if c.startswith("error_")]
+        x = "time" if "time" in df.columns else (
+            "t" if "t" in df.columns else ("step" if "step" in df.columns else "n"))
+        if metrics:
+            # Use last valid sample as a compact "final-time" indicator
+            last = df[[x] + metrics].dropna().tail(1)
+            if not last.empty:
+                st.write("#### Snapshot at the last available sample")
+                st.dataframe(last, width='stretch')
+            # show peak error over time (helps detect spikes/instabilities)
+            st.write("#### Peak error over the run (max over time)")
+            peak = df[metrics].max(numeric_only=True).to_frame(name="max").T
+            st.dataframe(peak, width='stretch')
+        metrics = [c for c in df.columns if c.startswith("error_")]
+        x = "time" if "time" in df.columns else ("t" if "t" in df.columns else res.x_candidates[0])
+        st.write(f"### MMS error history vs `{x}`")
+
+        # Default: plot current file alone (Plotly = legend toggling)
+        fig = plot_compare_timeseries({uf.name: df}, x, metrics, title="MMS error history")
+        st.plotly_chart(fig, width="stretch")
+
+        compare_expander_timeseries(
+            kind="mms",
+            current_name=uf.name,
+            current_df=df,
+            x_col=x,
+            y_cols=metrics,
+            title="MMS comparison",
+            expander_label="🔁 Compare with another MMS CSV",
+            key_prefix="cmp_mms",
+            enable_ai=True,
+            build_comparison_prompt=build_comparison_prompt,
+            stream_generate=lambda prompt, model, host: ollama_generate_markdown_stream(
+                prompt=prompt,
+                model=model,
+                host=host,
+            )
+        )
+
+        with st.expander("📘 What do these plots indicate?"):
+            st.markdown(mms_explanation())
+
+        with st.expander("📗 MMS analysis for dummies"):
+            st.markdown(mms_explanation_for_dummies())
+
+        ai_expander("MMS Analysis", res, uf)
+
+    with st.expander("Raw data"):
+        st.dataframe(df, width='stretch')
