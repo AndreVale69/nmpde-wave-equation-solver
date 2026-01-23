@@ -18,7 +18,7 @@ import streamlit as st
 
 try:
     from tools.plot.utils.generate_markdown import ollama_generate_markdown, ollama_generate_markdown_stream
-    from tools.plot.utils.llm_utils import build_interpretation_prompt
+    from tools.plot.utils.llm_utils import build_interpretation_prompt, build_comparison_prompt
     from tools.plot.utils.csv_utils import read_csv_robust
     from tools.plot.plot_convergence import build_figure as build_convergence_figure
     from tools.plot.utils.convergence_utils import (
@@ -34,7 +34,7 @@ try:
 except Exception:
     # Standalone layout (same folder)
     from utils.generate_markdown import ollama_generate_markdown, ollama_generate_markdown_stream
-    from utils.llm_utils import build_interpretation_prompt
+    from utils.llm_utils import build_interpretation_prompt, build_comparison_prompt
     from utils.csv_utils import read_csv_robust
     from plot_convergence import build_figure as build_convergence_figure
     from utils.convergence_utils import (
@@ -335,6 +335,13 @@ for item in parsed_items:
             title="Energy comparison",
             expander_label="🔁 Compare with another Energy CSV",
             key_prefix="cmp_dissip",
+            enable_ai=True,
+            build_comparison_prompt=build_comparison_prompt,
+            stream_generate=lambda prompt, model, host: ollama_generate_markdown_stream(
+                prompt=prompt,
+                model=model,
+                host=host,
+            )
         )
 
         with st.expander("📘 What do these plots indicate?"):
@@ -374,6 +381,13 @@ for item in parsed_items:
             title="Modal comparison",
             expander_label="🔁 Compare with another Modal CSV",
             key_prefix="cmp_modal",
+            enable_ai=True,
+            build_comparison_prompt=build_comparison_prompt,
+            stream_generate=lambda prompt, model, host: ollama_generate_markdown_stream(
+                prompt=prompt,
+                model=model,
+                host=host,
+            )
         )
 
         with st.expander("📘 What does this plot indicate?"):
@@ -434,6 +448,13 @@ for item in parsed_items:
             title="Convergence comparison",
             expander_label="🔁 Compare with another Convergence CSV",
             key_prefix="cmp_conv",
+            enable_ai=True,
+            build_comparison_prompt=build_comparison_prompt,
+            stream_generate=lambda prompt, model, host: ollama_generate_markdown_stream(
+                prompt=prompt,
+                model=model,
+                host=host,
+            )
         )
 
         with st.expander("📘 What do these plots indicate?"):
@@ -475,6 +496,13 @@ for item in parsed_items:
             title="MMS comparison",
             expander_label="🔁 Compare with another MMS CSV",
             key_prefix="cmp_mms",
+            enable_ai=True,
+            build_comparison_prompt=build_comparison_prompt,
+            stream_generate=lambda prompt, model, host: ollama_generate_markdown_stream(
+                prompt=prompt,
+                model=model,
+                host=host,
+            )
         )
 
         with st.expander("📘 What do these plots indicate?"):

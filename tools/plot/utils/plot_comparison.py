@@ -1,3 +1,5 @@
+from typing import Callable, Iterable, Optional
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -65,20 +67,29 @@ def compare_expander_timeseries(
         title: str,
         expander_label: str,
         key_prefix: str,
+        # AI comparison options
+        enable_ai: bool = False,
+        build_comparison_prompt: Optional[Callable[[str, pd.DataFrame, str, pd.DataFrame, str], str]] = None,
+        stream_generate: Optional[Callable[[str, str, str], Iterable[str]]] = None,
+        default_host: str = "https://ollama.com",
+        default_model: str = "gpt-oss:120b-cloud",
 ) -> None:
     """
-    Create an expander in Streamlit to compare time series data from different
-    uploaded CSV files.
-
+    Streamlit expander to compare the current time series DataFrame against others of the same kind.
     Args:
-        kind (str): The kind/category of the data to compare.
-        current_name (str): The name of the current dataset.
-        current_df (pd.DataFrame): The DataFrame of the current dataset.
+        kind (str): The kind of analysis (e.g., "time_series").
+        current_name (str): The name of the current DataFrame/run.
+        current_df (pd.DataFrame): The current DataFrame to compare from.
         x_col (str): The column name to use for the x-axis.
         y_cols (list[str]): A list of column names to plot on the y-axis.
         title (str): The title of the plot.
         expander_label (str): The label for the Streamlit expander.
-        key_prefix (str): A prefix for Streamlit widget keys to ensure uniqueness.
+        key_prefix (str): A prefix for Streamlit widget keys to avoid collisions.
+        enable_ai (bool): Whether to enable AI comparison features.
+        build_comparison_prompt (Callable): Function to build the AI prompt for comparison.
+        stream_generate (Callable): Function to stream AI-generated text.
+        default_host (str): Default host for the AI model.
+        default_model (str): Default model name for the AI.
     """
     with st.expander(expander_label):
         pool = st.session_state.get("parsed_by_kind", {}).get(kind, [])
@@ -106,6 +117,7 @@ def compare_expander_timeseries(
 
         other_df = next(e["df"] for e in pool if e["name"] == other)
 
+        # Plot overlay
         fig = plot_compare_timeseries(
             {current_name: current_df, other: other_df},
             x_col,
@@ -113,3 +125,42 @@ def compare_expander_timeseries(
             title=title,
         )
         st.plotly_chart(fig, width="stretch")
+
+        # -------------------------
+        # Optional AI comparison
+        # -------------------------
+        if enable_ai and build_comparison_prompt and stream_generate:
+            with st.expander("🤖 AI comparison comment"):
+                host = st.text_input(
+                    "Ollama host",
+                    value=default_host,
+                    key=f"{key_prefix}_ai_host_{current_name}",
+                )
+                model = st.text_input(
+                    "Model",
+                    value=default_model,
+                    key=f"{key_prefix}_ai_model_{current_name}",
+                )
+
+                # (Optional) show help link
+                st.caption("Models: https://ollama.com/search")
+
+                if st.button(
+                        "Generate AI comparison",
+                        key=f"{key_prefix}_ai_btn_{current_name}",
+                        type="secondary",
+                ):
+                    try:
+                        with st.spinner("🤖 Generating comparison...", show_time=True):
+                            prompt = build_comparison_prompt(
+                                kind, current_df, current_name, other_df, other
+                            )
+
+                            out = st.empty()
+                            acc = ""
+                            for chunk in stream_generate(prompt, model, host):
+                                acc += chunk
+                                out.markdown(acc)
+                        out.markdown(acc)
+                    except Exception as e:
+                        st.error(f"Ollama error: {e}")
