@@ -1059,11 +1059,7 @@ class PrmGUI(tk.Tk):
         # convergence study validation
         conv = params.get("Study", {}).get("convergence_study")
         if conv in (True, "true", "True"):
-            if ptype != "MMS":
-                return False, "Study.convergence_study can only be enabled when Problem.type is 'MMS'"
-            ctype = str(params.get("Study", {}).get("convergence_type", "")).strip().lower()
-            if ctype not in ("time", "space"):
-                return False, "Missing/invalid Study.convergence_type (must be 'Time' or 'Space') when convergence_study is enabled"
+            pass
         else:
             # if convergence is disabled, the csv path must not be set
             if params.get("Study", {}).get("convergence_csv"):
