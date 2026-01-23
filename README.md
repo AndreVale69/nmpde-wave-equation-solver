@@ -322,6 +322,8 @@ Run:
 python3 tools/prm_gui.py
 ```
 
+https://github.com/user-attachments/assets/abb67b74-0635-4448-99a5-6b136bdb22f7
+
 > [!NOTE]
 > Under the hood we use deal.II’s `ParameterHandler`. While this project ships examples as classic text **`.prm`**,
 > deal.II can also read/write parameters in formats like **XML** and **JSON**.
